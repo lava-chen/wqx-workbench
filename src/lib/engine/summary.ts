@@ -9,6 +9,7 @@ import {
   RESERVE, SHIP_BASE,
   get_ANNUAL_RUNOFF_YI,
 } from "./curves";
+import { compute_fangpo_line } from "./dispatch";
 
 export interface WaterDeps {
   Z_dead: number;
@@ -93,7 +94,15 @@ export function build_table(water_deps: Record<string, WaterDeps>, flood_deps: R
     const V_xing = V_zheng - V_dead;
 
     // 防洪限制水位: 此处由调用方传入 (不再内调 dispatch)
-    const Z_xun = fd.Z_fangshou_high > 0 ? Z_zheng : Z_dead; // 简化: 若无防洪高则用死水位
+    const { Z_env } = compute_fangpo_line(sk, Z_dead, wd.Np, 30);
+    let Z_xun = Z_dead;
+    for (const idx of [3, 4]) {
+      const value = Z_env[idx];
+      if (!isNaN(value)) {
+        Z_xun = value;
+        break;
+      }
+    }
     const Z_fangshou = fd.Z_fangshou_high;
     const Z_design = fd.Z_design;
     const Z_check = fd.Z_check;

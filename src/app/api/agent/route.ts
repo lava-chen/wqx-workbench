@@ -78,6 +78,13 @@ function estimatePromptTokens(
   req: { question: string; history: any[] },
   kind: string,
 ): number {
+  // greeting 类的 prompt 极简 (系统 prompt + 用户寒暄 + 任务指令)
+  if (kind === "greeting") {
+    const sys = SYSTEM_PROMPT.length;
+    const q = req.question.length;
+    const task = 50; // "# 任务\n简短自然回应, ≤ 50 字. ..."
+    return Math.ceil((sys + q + task) / 1.6);
+  }
   // meta 类的 prompt 是 project-info 摘要, 走轻量路径
   if (kind === "meta") {
     const sys = SYSTEM_PROMPT.length;

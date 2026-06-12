@@ -17,7 +17,6 @@ import {
   FIRE_OP_FACTOR,
 } from "@/lib/engine";
 import { useParams } from "./useParams";
-import { useSchemes } from "./useSchemes";
 
 // ── Flood keys ───────────────────────────────────────────
 const FLOOD_DOWN_KEY = "P=5% (20年)";
@@ -198,17 +197,16 @@ function route_flood_with_offset(
 export function useAllResults() {
   const { params } = useParams();
   const { Q_SAFE, R0, Z_zheng_offset } = params;
-  const { schemes, version } = useSchemes();
 
   return useMemo(() => {
-    const schemeKeys = schemes.map((s) => s.id);
+    const schemes = ["I", "II", "III", "IV"] as const;
     const waterResults: Record<string, any> = {};
     const floodResults: Record<string, any> = {};
     const econResults: any[] = [];
 
     const q_in = load_all_floods();
 
-    for (const sk of schemeKeys) {
+    for (const sk of schemes) {
       const dead = computeDeadLevel(sk);
       const np = findNpForScheme(sk);
       const Np_wan = np.N_p / 1e4;
@@ -243,6 +241,8 @@ export function useAllResults() {
         Q_design_max: flood.Q_design_max,
         Z_check: flood.Z_check,
         Q_check_max: flood.Q_check_max,
+        // 保留完整调洪过程线，供交互图表页直接绘制。
+        series: flood.series,
       };
     }
 
@@ -251,6 +251,6 @@ export function useAllResults() {
     // 经济比较 (using parameterized R0)
     const econ = localEconomicCompare(table, R0);
 
-    return { waterResults, floodResults, table, econ, schemes: schemeKeys };
-  }, [Q_SAFE, R0, Z_zheng_offset, version, schemes]);
+    return { waterResults, floodResults, table, econ, schemes };
+  }, [Q_SAFE, R0, Z_zheng_offset]);
 }

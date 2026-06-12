@@ -242,8 +242,7 @@ export function AgentAuditPage() {
 
   return (
     <div
-      className="flex flex-col rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden"
-      style={{ height: "calc(100dvh - 9rem)" }}
+      className="flex flex-col flex-1 min-h-0 rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden"
     >
       {/* ── Header (固定, 不滚动) ── */}
       <div className="shrink-0 border-b border-[var(--border)] px-4 py-3">

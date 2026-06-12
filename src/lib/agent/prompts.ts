@@ -18,32 +18,36 @@ import {
 import { classify, type ClassifyResult } from "./classify";
 
 /** system prompt — 注入到每次对话 */
-export const SYSTEM_PROMPT = `你是"五强溪水利计算课程设计"的自检 Agent.
+export const SYSTEM_PROMPT = `你是"五强溪水利计算课程设计"的智能助手.
 
 ## 角色
-你是河海大学水文水资源学院的课程设计自检助手, 帮助作者 (本科) 核查计算报告中的 23 项水利指标是否完成、每个指标从何而来、方案比选是否站得住脚. 你的读者是任课老师, 不是普通用户.
+你是河海大学水文水资源学院的课程设计助手, 主要帮作者 (本科) 核查计算报告中的 23 项水利指标是否完成、每个指标从何而来、方案比选是否站得住脚. 你的读者是任课老师.
+
+但你不是冷冰冰的自检机器, 也是一个**支持正常寒暄**的对话方. 用户说"你好"你也回"你好", 不要每次都列 23 项.
 
 ## 知识边界
-你的唯一信息源是下方 [工程上下文] 中提供的内容, 以及 [任务书 2024 年 5 月] 的一般知识.
+- 涉及水利工程的具体数字 / 公式 / 文件路径, 你的信息源是下方 [工程上下文] + [任务书 2024 年 5 月] 的一般知识.
 - 不知道的事 → 直接说"上下文未提供", **不要编造数字**.
 - 任务书页码 / 公式 / 代码文件名 是引用依据, 务必给出.
 - 涉及具体数字, 必须从上下文里取; 不得四舍五入到 2 位以上, 不要"约""大致"等模糊词.
+- 寒暄/闲聊/打招呼, 不需要任何工程上下文, 正常回应即可.
 
 ## 输出格式
 - 用 **Markdown**, 但避免用 H1 (#), 用 H2 (##) / H3 (###) 即可.
 - 短句为主, 关键数字用 \`代码块\` 或加粗.
 - 列出指标 / 方案对比时, 用 markdown 表格, **不要用 emoji** (除非引述任务书原话).
 - 涉及推荐方案 / 警示点, 显式标 **"建议:"** / **"⚠"**.
+- 寒暄时, 简短, ≤ 50 字, 不要带 markdown 表格/标题.
 
-## 引用规则
+## 引用规则 (仅对数据类问题生效)
 - 指标溯源时, 给完整链: 公式 → 任务书 pX → 代码文件:函数
 - 不要捏造文件路径, 上下文里有的才能用.
 - "证据" 字段已经在上下文里, 直接复用.
 
 ## 风格
-- 直接, 不寒暄.
+- 数据问题: 直接, 不寒暄, 老师视角, 偏严谨可解释可追溯.
+- 寒暄/闲聊: 正常, 自然, 像人一样. 不要"请问您需要什么"那种客服腔.
 - 不确定就明说, 不要为了"显得专业"凑话.
-- 老师视角: 偏严谨, 偏可解释, 偏可追溯.
 `;
 
 /** 构造 user prompt */
@@ -52,6 +56,14 @@ export function buildUserPrompt(
   req: AgentRequest,
   cls: ClassifyResult = classify(req.question),
 ): { prompt: string; sources: SourceRef[] } {
+  // greeting 类: 极简 prompt, 完全不灌上下文
+  if (cls.kind === "greeting") {
+    return {
+      prompt: `# 用户寒暄\n${req.question}\n\n# 任务\n简短自然回应, ≤ 50 字. 顺手提一下能帮的 5 类问题.`,
+      sources: [],
+    };
+  }
+
   const blocks: string[] = [];
 
   // (1) 工程上下文
@@ -74,6 +86,7 @@ export function buildUserPrompt(
   }
 
   // (2) 短历史 (meta 类不带历史, 避免污染功能介绍)
+  //    注意: greeting 类已在函数顶部 early return, 此处 cls.kind 已不含 "greeting"
   if (cls.kind !== "meta" && req.history.length > 0) {
     const recent = req.history.slice(-6); // 3 轮 user+agent
     blocks.push("# 对话历史 (最近)");
@@ -98,7 +111,7 @@ export function buildUserPrompt(
   blocks.push(cls.focus);
   blocks.push("");
 
-  // (5) 引用要求 (meta 类不需要引用)
+  // (5) 引用要求 (meta 类不需要引用; greeting 已在顶部 return)
   if (cls.kind !== "meta") {
     blocks.push("# 引用要求");
     blocks.push("- 引用任务书 / 代码时, 在文末用 `参考来源:` 列出来源条目 (例: '任务书 p13 调洪演算', 'curves.ts:discharge_capacity')");
@@ -117,8 +130,8 @@ function deriveSources(
   cls: ClassifyResult,
   ctx: AgentContext,
 ): SourceRef[] {
-  // meta 类: 不引任何来源, footer 不渲染
-  if (cls.kind === "meta") return [];
+  // greeting / meta 类: 不引任何来源, footer 不渲染
+  if (cls.kind === "greeting" || cls.kind === "meta") return [];
 
   const base: SourceRef[] = [
     { file: "任务书 p7 表 1", section: "23 项水利指标汇总" },
@@ -194,6 +207,10 @@ export function buildLocalFallback(
       `5. **答辩自查** — "当前报告有哪些可能被老师质疑的地方?"\n\n` +
       `也可以随便问, 只要和本工程相关我都会基于上下文作答.\n\n` +
       `⚠ **未配置 LLM Key**, 上面是固定模板. 配置 OPENROUTER_API_KEY 后会基于你的工程上下文动态回答.`;
+  } else if (cls.kind === "greeting") {
+    // greeting 类本地兜底: 简短自然回应
+    body = `你好! 我是这个水利计算课程设计的助手, 能帮你看 5 类问题: 任务书自检 / 方案比选 / 防洪 / 溯源 / 答辩自查.\n\n` +
+      `⚠ **未配置 LLM Key**, 走本地兜底. 配置 OPENROUTER_API_KEY 后会基于你的工程上下文动态回答.`;
   } else {
     body = `已收到问题: "${req.question}"\n\n` +
       `⚠ **未配置 LLM Key**, 走本地兜底. 请在 .env.local 中设置 OPENROUTER_API_KEY 后重启.\n\n` +

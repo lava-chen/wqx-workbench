@@ -108,6 +108,7 @@ export interface SourceRef {
 
 /** 问题分类 (用于切换 prompt 策略) */
 export type QuestionKind =
+  | "greeting"            // 寒暄: "你好" / "在吗" / "谢谢" — 不灌上下文
   | "checklist"           // 23 项是否完成
   | "comparison"          // 方案 II 为什么最优
   | "indicator-source"    // 某个指标从哪里来

@@ -1,75 +1,54 @@
 "use client";
 
-/**
- * 调洪过程线 (fig_flood_routing_*) — Recharts 交互版
- * 内容对齐 figs_scientific/scripts_plot_flood_routing.py：
- *  - 双 Y 轴：左 Z (m)，右 Q (m³/s)
- *  - 蓝线（左轴）：水位 Z 过程
- *  - 绿阶梯（右轴）：来水 Q_in
- *  - 红线（右轴）：下泄 Q_out
- *  - 橙色虚线（右轴）：安全泄量 q_safe
- *  - 黑色细实线（左轴）：起调水位 Z_start
- *
- * 与 figs_scientific 不同之处（web 交互增益）：
- *  - hover Tooltip 显示精确 t/Z/Q 值
- *  - Brush 缩放 — 拖动选时段（交互亮点）
- *  - Legend 点击切换曲线
- *  - 2×2 网格对比（fig_flood_routing_compare_2x2 风格）
- *  - 4×3 全景（4 方案 × 3 标准）
- */
-
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
+  Brush,
+  CartesianGrid,
   ComposedChart,
+  Legend,
   Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ReferenceLine,
-  Brush,
 } from "recharts";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
-  CardDescription,
 } from "@/components/ui/card";
 
-// ────────────────────────────────────────────────────────────
-// 颜色 — 与 hydro_plot.COLORS 对齐
-// ────────────────────────────────────────────────────────────
 const COLORS = {
-  Z: "#1F77B4",          // 水位（蓝）
-  Q_in: "#2E8B57",        // 来水（墨绿）
-  Q_out: "#C0392B",       // 下泄（砖红）
-  Q_safe: "#FF7F0E",      // 安全泄量（橙虚）
-  Z_zheng: "#000000",     // 起调水位（黑细实）
+  Z: "#1F77B4",
+  Q_in: "#2E8B57",
+  Q_out: "#C0392B",
+  Q_safe: "#FF7F0E",
+  Z_start: "#000000",
 };
 
-const DT_H = 3; // 每段 3 小时（与 flood.ts 一致）
-
-// 标准 key 标签
+const DT_H = 3;
 const STD_KEYS = ["P5", "P0_1", "P0_01"] as const;
-const STD_LABELS: Record<string, { label: string; sub: string; freq: string }> = {
-  P5:    { label: "P=5% 下游防洪",   sub: "20 年一遇",  freq: "P=5%" },
-  P0_1:  { label: "P=0.1% 大坝设计", sub: "1000 年一遇", freq: "P=0.1%" },
-  P0_01: { label: "P=0.01% 大坝校核", sub: "10000 年一遇", freq: "P=0.01%" },
+const SCHEME_KEYS = ["I", "II", "III", "IV"] as const;
+
+const STD_LABELS: Record<
+  (typeof STD_KEYS)[number],
+  { label: string; sub: string }
+> = {
+  P5: { label: "P=5% 下游防洪", sub: "20 年一遇" },
+  P0_1: { label: "P=0.1% 大坝设计", sub: "1000 年一遇" },
+  P0_01: { label: "P=0.01% 大坝校核", sub: "10000 年一遇" },
 };
 
-const SCHEME_LABELS: Record<string, string> = {
+const SCHEME_LABELS: Record<(typeof SCHEME_KEYS)[number], string> = {
   I: "方案 I",
   II: "方案 II",
   III: "方案 III",
   IV: "方案 IV",
 };
 
-// ────────────────────────────────────────────────────────────
-// 类型
-// ────────────────────────────────────────────────────────────
 export interface FloodSeries {
   Q_in: number[];
   Z: number[];
@@ -92,11 +71,8 @@ export interface FloodChartsProps {
   Q_SAFE: number;
 }
 
-// ────────────────────────────────────────────────────────────
-// 单方案 × 单标准 调洪图
-// ────────────────────────────────────────────────────────────
 interface FloodPoint {
-  t: number;       // day
+  t: number;
   Z: number;
   Q_in: number;
   Q_out: number;
@@ -107,76 +83,88 @@ interface FloodChartBundle {
   Z_start: number;
   Z_max: number;
   Q_max: number;
-  t_total: number; // 总时长 (d)
+  t_total: number;
   Q_safe: number;
 }
 
+interface FloodTooltipItem {
+  color?: string;
+  stroke?: string;
+  name?: string;
+  value?: number;
+}
+
+interface FloodTooltipProps {
+  active?: boolean;
+  payload?: FloodTooltipItem[];
+  label?: number | string;
+}
+
 function buildFloodData(
-  sk: string,
-  std_key: string,
+  stdKey: string,
   floodResults: FloodResultWithSeries | undefined,
-  Q_SAFE: number,
-  Z_start_override?: number,
+  qSafe: number,
+  zStartOverride?: number,
 ): FloodChartBundle | null {
   if (!floodResults?.series) return null;
-  const series = floodResults.series[std_key];
+  const series = floodResults.series[stdKey];
   if (!series) return null;
 
-  const Q_in_series = series.Q_in;
-  const Z_series = series.Z;
-  const Q_out_series = series.Q_out;
-  const n = Q_in_series.length;
+  const qInSeries = series.Q_in;
+  const zSeries = series.Z;
+  const qOutSeries = series.Q_out;
+  const n = qInSeries.length;
 
-  // 构造 n+1 数据点（端点形式），最后一段 Q_in 用 Q_in[n-1] 延伸
   const data: FloodPoint[] = [];
   for (let i = 0; i <= n; i++) {
     data.push({
       t: (i * DT_H) / 24,
-      Z: Z_series[i],
-      Q_in: i < n ? Q_in_series[i] : Q_in_series[n - 1],
-      Q_out: Q_out_series[i],
+      Z: zSeries[i],
+      Q_in: i < n ? qInSeries[i] : qInSeries[n - 1],
+      Q_out: qOutSeries[i],
     });
   }
-  const t_total = (n * DT_H) / 24;
 
   return {
     data,
-    Z_start: Z_start_override ?? Z_series[0],
+    Z_start: zStartOverride ?? zSeries[0],
     Z_max: series.Z_max,
     Q_max: series.Q_max,
-    t_total,
-    Q_safe: Q_SAFE,
+    t_total: (n * DT_H) / 24,
+    Q_safe: qSafe,
   };
 }
 
 function FloodRoutingChart({
   sk,
-  std_key,
+  stdKey,
   floodResults,
-  Q_SAFE,
-  Z_start_override,
+  qSafe,
+  zStartOverride,
   height = 320,
   showBrush = false,
+  compact = false,
 }: {
-  sk: string;
-  std_key: string;
+  sk: (typeof SCHEME_KEYS)[number];
+  stdKey: (typeof STD_KEYS)[number];
   floodResults: FloodResultWithSeries | undefined;
-  Q_SAFE: number;
-  Z_start_override?: number;
+  qSafe: number;
+  zStartOverride?: number;
   height?: number;
   showBrush?: boolean;
+  compact?: boolean;
 }) {
   const bundle = useMemo(
-    () => buildFloodData(sk, std_key, floodResults, Q_SAFE, Z_start_override),
-    [sk, std_key, floodResults, Q_SAFE, Z_start_override],
+    () => buildFloodData(stdKey, floodResults, qSafe, zStartOverride),
+    [stdKey, floodResults, qSafe, zStartOverride],
   );
 
   if (!bundle) {
     return (
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">
-            {SCHEME_LABELS[sk]} · {STD_LABELS[std_key].label}
+        <CardHeader className={compact ? "pb-1" : "pb-2"}>
+          <CardTitle className={compact ? "text-[13px]" : "text-sm"}>
+            {SCHEME_LABELS[sk]} · {STD_LABELS[stdKey].label}
           </CardTitle>
         </CardHeader>
         <CardContent
@@ -190,38 +178,46 @@ function FloodRoutingChart({
   }
 
   const { data, Z_start, Z_max, Q_max, t_total, Q_safe } = bundle;
-  const Z_min = Math.min(...data.map((d) => d.Z));
-  const Q_all_max = Math.max(
-    Q_safe,
-    ...data.map((d) => Math.max(d.Q_in, d.Q_out)),
-  );
+  const zMin = Math.min(...data.map((d) => d.Z));
+  const qAllMax = Math.max(Q_safe, ...data.map((d) => Math.max(d.Q_in, d.Q_out)));
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm">
-          {SCHEME_LABELS[sk]} · {STD_LABELS[std_key].label}
+      <CardHeader className={compact ? "pb-1" : "pb-2"}>
+        <CardTitle className={compact ? "text-[13px]" : "text-sm"}>
+          {SCHEME_LABELS[sk]} · {STD_LABELS[stdKey].label}
         </CardTitle>
-        <CardDescription className="text-xs font-mono">
-          Z_max = {Z_max.toFixed(2)} m · Q_max = {Q_max.toFixed(0)} m³/s · Z_0 ={" "}
-          {Z_start.toFixed(1)} m · T = {t_total.toFixed(1)} d
-        </CardDescription>
+        {compact ? (
+          <CardDescription className="text-[11px] font-mono leading-tight text-slate-500">
+            Z_max {Z_max.toFixed(2)} · Q_max {Q_max.toFixed(0)} · Z_0 {Z_start.toFixed(1)}
+          </CardDescription>
+        ) : (
+          <CardDescription className="text-xs font-mono">
+            Z_max = {Z_max.toFixed(2)} m · Q_max = {Q_max.toFixed(0)} m³/s · Z_0 ={" "}
+            {Z_start.toFixed(1)} m · T = {t_total.toFixed(1)} d
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={data}
-            margin={{ top: 10, right: 60, left: 8, bottom: showBrush ? 36 : 4 }}
+            margin={{
+              top: compact ? 6 : 10,
+              right: compact ? 42 : 60,
+              left: compact ? 2 : 8,
+              bottom: showBrush ? 36 : compact ? 0 : 4,
+            }}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
             <XAxis
               dataKey="t"
               type="number"
               domain={[0, t_total]}
-              tick={{ fontSize: 9 }}
-              tickFormatter={(v) => v.toFixed(1)}
+              tick={{ fontSize: compact ? 8 : 9 }}
+              tickFormatter={(v) => Number(v).toFixed(1)}
               label={
-                showBrush
+                showBrush || compact
                   ? undefined
                   : {
                       value: "时间 t (d)",
@@ -233,45 +229,45 @@ function FloodRoutingChart({
             />
             <YAxis
               yAxisId="z"
-              tick={{ fontSize: 9 }}
-              domain={[Z_min - 0.5, Z_max + 1.5]}
+              tick={{ fontSize: compact ? 8 : 9 }}
+              domain={[zMin - 0.5, Z_max + 1.5]}
               label={{
                 value: "Z (m)",
                 angle: -90,
                 position: "insideLeft",
-                fontSize: 9,
+                fontSize: compact ? 8 : 9,
                 fill: COLORS.Z,
               }}
             />
             <YAxis
               yAxisId="q"
               orientation="right"
-              tick={{ fontSize: 9 }}
-              domain={[0, Q_all_max * 1.15]}
+              tick={{ fontSize: compact ? 8 : 9 }}
+              domain={[0, qAllMax * 1.15]}
               label={{
-                value: "Q (m³/s)",
+                value: compact ? "Q" : "Q (m³/s)",
                 angle: 90,
                 position: "insideRight",
-                fontSize: 9,
+                fontSize: compact ? 8 : 9,
               }}
             />
             <Tooltip
-              content={({ active, payload, label }: any) => {
+              content={({ active, payload, label }: FloodTooltipProps) => {
                 if (!active || !payload || payload.length === 0) return null;
                 return (
-                  <div className="rounded-md border bg-white/95 px-3 py-2 shadow-md text-xs">
-                    <div className="font-semibold mb-1">
-                      t = {(label as number).toFixed(2)} d
+                  <div className="rounded-md border bg-white/95 px-3 py-2 text-xs shadow-md">
+                    <div className="mb-1 font-semibold">
+                      t = {Number(label).toFixed(2)} d
                     </div>
-                    {payload.map((p: any, i: number) => (
-                      <div key={i} className="flex items-center gap-2">
+                    {payload.map((item, index: number) => (
+                      <div key={index} className="flex items-center gap-2">
                         <span
                           className="inline-block h-2 w-2 rounded-sm"
-                          style={{ background: p.color || p.stroke }}
+                          style={{ background: item.color || item.stroke }}
                         />
-                        <span className="text-slate-600">{p.name}:</span>
+                        <span className="text-slate-600">{item.name}:</span>
                         <span className="font-mono font-semibold">
-                          {(p.value as number).toFixed(2)}
+                          {Number(item.value).toFixed(2)}
                         </span>
                       </div>
                     ))}
@@ -279,9 +275,8 @@ function FloodRoutingChart({
                 );
               }}
             />
-            <Legend wrapperStyle={{ fontSize: 9 }} />
+            {!compact && <Legend wrapperStyle={{ fontSize: 9 }} />}
 
-            {/* 左轴：水位 */}
             <Line
               yAxisId="z"
               type="monotone"
@@ -295,7 +290,7 @@ function FloodRoutingChart({
             <ReferenceLine
               yAxisId="z"
               y={Z_start}
-              stroke={COLORS.Z_zheng}
+              stroke={COLORS.Z_start}
               strokeWidth={1}
               strokeDasharray="4 2"
               label={{
@@ -306,7 +301,6 @@ function FloodRoutingChart({
               }}
             />
 
-            {/* 右轴：流量 */}
             <Line
               yAxisId="q"
               type="step"
@@ -334,7 +328,7 @@ function FloodRoutingChart({
               strokeWidth={1.2}
               strokeDasharray="3 2"
               label={{
-                value: `q_安 ${Q_safe}`,
+                value: compact ? "q_safe" : `q_safe ${Q_safe}`,
                 position: "insideBottomRight",
                 fontSize: 8,
                 fill: COLORS.Q_safe,
@@ -348,7 +342,7 @@ function FloodRoutingChart({
                 height={26}
                 stroke={COLORS.Z}
                 travellerWidth={8}
-                tickFormatter={(v) => v.toFixed(1)}
+                tickFormatter={(v) => Number(v).toFixed(1)}
                 startIndex={0}
                 endIndex={Math.min(data.length - 1, 24)}
               />
@@ -360,9 +354,6 @@ function FloodRoutingChart({
   );
 }
 
-// ────────────────────────────────────────────────────────────
-// 2×2 对比（fig_flood_routing_compare_2x2 风格）
-// ────────────────────────────────────────────────────────────
 export function FloodRouting2x2({
   floodResults,
   Q_SAFE,
@@ -371,26 +362,22 @@ export function FloodRouting2x2({
 }: {
   floodResults: Record<string, FloodResultWithSeries>;
   Q_SAFE: number;
-  std_key?: "P5" | "P0_1" | "P0_01";
+  std_key?: (typeof STD_KEYS)[number];
   height?: number;
 }) {
-  const schemes = ["I", "II", "III", "IV"];
   return (
     <div className="space-y-2">
-      <div className="text-xs text-slate-500 px-1">
-        四方案 {STD_LABELS[std_key].label}（{STD_LABELS[std_key].sub}）调洪过程线对比。
-        {std_key === "P5" && "下游防洪：下泄被安全泄量约束，水位由入库与泄流能力共同决定。"}
-        {std_key === "P0_1" && "大坝设计：闸门全开，校核泄流能力。"}
-        {std_key === "P0_01" && "大坝校核：闸门全开，验证最高水位。"}
+      <div className="px-1 text-xs text-slate-500">
+        四方案 {STD_LABELS[std_key].label}（{STD_LABELS[std_key].sub}）调洪过程对比。
       </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        {schemes.map((sk) => (
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+        {SCHEME_KEYS.map((sk) => (
           <FloodRoutingChart
             key={sk}
             sk={sk}
-            std_key={std_key}
+            stdKey={std_key}
             floodResults={floodResults?.[sk]}
-            Q_SAFE={Q_SAFE}
+            qSafe={Q_SAFE}
             height={height}
             showBrush={false}
           />
@@ -400,55 +387,72 @@ export function FloodRouting2x2({
   );
 }
 
-// ────────────────────────────────────────────────────────────
-// 4×3 全景（4 方案行 × 3 标准列）— fig_flood_routing_scheme_{I,II,III,IV}_P{5,0.1,0.01} 12 张等价
-// ────────────────────────────────────────────────────────────
 export function FloodRoutingAllGrid({
   floodResults,
   Q_SAFE,
-  cellHeight = 240,
+  cellHeight = 360,
 }: {
   floodResults: Record<string, FloodResultWithSeries>;
   Q_SAFE: number;
   cellHeight?: number;
 }) {
-  const schemes = ["I", "II", "III", "IV"];
+  const [activeScheme, setActiveScheme] =
+    useState<(typeof SCHEME_KEYS)[number]>("I");
+  const [activeStd, setActiveStd] = useState<(typeof STD_KEYS)[number]>("P5");
+
   return (
     <div className="space-y-3">
-      <div className="text-xs text-slate-500 px-1">
-        全景视图：4 方案 × 3 标准 = 12 张调洪图。
-        hover 查看精确数值，拖动 Brush 缩放时间范围。
+      <div className="px-1 text-xs text-slate-500">
+        单图查看模式：通过按钮切换方案和标准，比 12 张缩略图更适合看调洪过程细节。
       </div>
-      {/* 列头 */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 px-1">
-        <div className="text-xs font-semibold text-slate-600">方案 \ 标准</div>
-        {STD_KEYS.map((sk) => (
-          <div key={sk} className="text-xs font-semibold text-slate-600">
-            {STD_LABELS[sk].label}
-            <div className="text-[10px] font-normal text-slate-500">
-              {STD_LABELS[sk].sub}
-            </div>
-          </div>
-        ))}
-      </div>
-      {schemes.map((sk) => (
-        <div key={sk} className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-          <div className="flex items-center text-sm font-semibold text-slate-700 px-1">
-            {SCHEME_LABELS[sk]}
-          </div>
-          {STD_KEYS.map((std_key) => (
-            <FloodRoutingChart
-              key={std_key}
-              sk={sk}
-              std_key={std_key}
-              floodResults={floodResults?.[sk]}
-              Q_SAFE={Q_SAFE}
-              height={cellHeight}
-              showBrush={false}
-            />
+      <div className="space-y-3 rounded-xl border border-slate-200 bg-white/85 p-3">
+        <div className="flex flex-wrap gap-2">
+          {SCHEME_KEYS.map((sk) => (
+            <button
+              key={sk}
+              type="button"
+              onClick={() => setActiveScheme(sk)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                activeScheme === sk
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
+              }`}
+            >
+              {SCHEME_LABELS[sk]}
+            </button>
           ))}
         </div>
-      ))}
+        <div className="flex flex-wrap gap-2">
+          {STD_KEYS.map((stdKey) => (
+            <button
+              key={stdKey}
+              type="button"
+              onClick={() => setActiveStd(stdKey)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                activeStd === stdKey
+                  ? "border-violet-600 bg-violet-600 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
+              }`}
+            >
+              <span>{STD_LABELS[stdKey].label}</span>
+              <span className="ml-2 text-[11px] opacity-80">
+                {STD_LABELS[stdKey].sub}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="px-1 text-xs text-slate-500">
+          当前查看：{SCHEME_LABELS[activeScheme]} / {STD_LABELS[activeStd].label}
+        </div>
+        <FloodRoutingChart
+          sk={activeScheme}
+          stdKey={activeStd}
+          floodResults={floodResults?.[activeScheme]}
+          qSafe={Q_SAFE}
+          height={cellHeight}
+          showBrush
+        />
+      </div>
     </div>
   );
 }

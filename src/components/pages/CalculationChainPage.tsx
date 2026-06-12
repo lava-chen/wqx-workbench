@@ -33,6 +33,7 @@ import {
   calcInstalled,
   find_repeat_capacity,
   SCHEMES,
+  z_to_v,
   RESERVE,
   SHIP_BASE,
   FENGTAN_LOSS,
@@ -248,6 +249,193 @@ function FormulaBlock({ formula }: { formula: string }) {
   );
 }
 
+function InlineSwitcher<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-xs font-medium transition",
+              active
+                ? "border-slate-900 bg-slate-900 text-white"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900",
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SimpleDataTable({
+  columns,
+  rows,
+  emptyText = "暂无数据",
+  defaultSortKey,
+  defaultSortDir = "asc",
+}: {
+  columns: Array<{
+    key: string;
+    label: string;
+    align?: "left" | "right" | "center";
+    unit?: string;
+    sortable?: boolean;
+  }>;
+  rows: Array<Record<string, string | number>>;
+  emptyText?: string;
+  defaultSortKey?: string;
+  defaultSortDir?: "asc" | "desc";
+}) {
+  const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc" | null>(
+    defaultSortKey ? defaultSortDir : null,
+  );
+
+  const sortedRows = useMemo(() => {
+    if (!sortKey || !sortDir) return rows;
+    const col = columns.find((c) => c.key === sortKey);
+    if (!col) return rows;
+    const numeric = rows.every(
+      (r) => typeof r[sortKey] === "number" || (typeof r[sortKey] === "string" && r[sortKey] !== "" && !isNaN(Number(r[sortKey]))),
+    );
+    const sign = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (numeric) {
+        return (Number(av) - Number(bv)) * sign;
+      }
+      return String(av).localeCompare(String(bv), "zh-Hans-CN") * sign;
+    });
+  }, [rows, columns, sortKey, sortDir]);
+
+  const cycleSort = (key: string) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+      return;
+    }
+    // asc -> desc -> null -> asc
+    if (sortDir === "asc") setSortDir("desc");
+    else if (sortDir === "desc") {
+      setSortKey(null);
+      setSortDir(null);
+    } else setSortDir("asc");
+  };
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="max-h-[420px] overflow-auto">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 bg-slate-50 z-10">
+            <tr className="border-b border-slate-200">
+              {columns.map((column) => {
+                const isSortable = column.sortable !== false; // 默认都可点排序
+                const active = sortKey === column.key;
+                return (
+                  <th
+                    key={column.key}
+                    onClick={isSortable ? () => cycleSort(column.key) : undefined}
+                    className={cn(
+                      "px-3 py-2 text-xs font-semibold text-slate-600 select-none",
+                      column.align === "right"
+                        ? "text-right"
+                        : column.align === "center"
+                          ? "text-center"
+                          : "text-left",
+                      isSortable && "cursor-pointer hover:text-slate-900",
+                      active && "text-slate-900",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1",
+                        column.align === "right" && "flex-row-reverse",
+                      )}
+                    >
+                      <span>
+                        {column.label}
+                        {column.unit && (
+                          <span className="ml-1 text-[10px] font-normal text-slate-400">
+                            ({column.unit})
+                          </span>
+                        )}
+                      </span>
+                      {isSortable && (
+                        <span
+                          className={cn(
+                            "text-[10px] leading-none transition-opacity",
+                            active ? "opacity-100" : "opacity-30",
+                          )}
+                        >
+                          {active ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                        </span>
+                      )}
+                    </span>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={columns.length}
+                  className="px-3 py-8 text-center text-sm text-slate-500"
+                >
+                  {emptyText}
+                </td>
+              </tr>
+            ) : (
+              sortedRows.map((row, idx) => (
+                <tr
+                  key={idx}
+                  className={cn(
+                    "border-b border-slate-100 last:border-b-0",
+                    idx % 2 === 0 ? "bg-white" : "bg-slate-50/55",
+                  )}
+                >
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={cn(
+                        "px-3 py-2 tabular-nums text-slate-700 whitespace-nowrap",
+                        column.align === "right"
+                          ? "text-right"
+                          : column.align === "center"
+                            ? "text-center"
+                            : "text-left",
+                      )}
+                    >
+                      {row[column.key]}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================
 // 子组件: 右侧步骤图表面板
 //   所有 9 步均使用 figs_scientific 中的静态 PNG (侧栏窄宽下
@@ -328,7 +516,7 @@ function StepVisualPanel({
   // 全部收起: 占位卡
   if (stepId == null || !node) {
     return (
-      <div className="rounded-2xl border bg-white shadow-sm sticky top-28 overflow-hidden">
+      <div className="rounded-2xl border bg-white shadow-sm overflow-hidden">
         <div className="aspect-[4/3] bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
           <div className="text-center px-6">
             <BarChart3 className="h-10 w-10 text-slate-300 mx-auto mb-2" />
@@ -352,7 +540,7 @@ function StepVisualPanel({
   return (
     <div
       key={stepId}
-      className="rounded-2xl border bg-white shadow-sm sticky top-28 overflow-hidden"
+      className="rounded-2xl border bg-white shadow-sm overflow-hidden"
     >
       {/* 图表区 — key 切换触发淡入 */}
       <div key={stepId} className="anim-cc-fade-up p-3 bg-white">
@@ -379,6 +567,248 @@ function StepVisualPanel({
           {node.subtitle}
         </p>
       </div>
+    </div>
+  );
+}
+
+// 右栏下半部: 步骤对应的"真表"区. 仅 step 3 (保证出力) 和
+// step 7 (调洪) 有真实表格数据, 其他步骤显示占位提示.
+type QUnit = "m3s" | "volume";
+
+function formatQ(q: number, unit: QUnit, kind: "year" | "step"): string {
+  if (unit === "m3s") return q.toFixed(2);
+  // 体量
+  if (kind === "year") {
+    // 亿 m³/年 = q * 31,536,000 / 1e8
+    return (q * 31536000 / 1e8).toFixed(4);
+  }
+  // 万 m³/时段 (3h = 10800s) = q * 10800 / 1e4
+  return (q * 10800 / 1e4).toFixed(3);
+}
+
+function QUnitToggle({
+  unit,
+  onChange,
+}: {
+  unit: QUnit;
+  onChange: (u: QUnit) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-full border border-slate-200 bg-white p-0.5 text-[10px] font-medium">
+      {([
+        { v: "m3s" as const, l: "m³/s" },
+        { v: "volume" as const, l: "水量" },
+      ]).map((opt) => {
+        const active = unit === opt.v;
+        return (
+          <button
+            key={opt.v}
+            type="button"
+            onClick={() => onChange(opt.v)}
+            className={cn(
+              "rounded-full px-2 py-0.5 transition-colors",
+              active
+                ? "bg-slate-900 text-white"
+                : "text-slate-500 hover:text-slate-800",
+            )}
+            title={opt.v === "m3s" ? "瞬时流量" : "年/时段累计水量"}
+          >
+            {opt.l}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StepTablePanel({
+  stepId,
+  node,
+  focusScheme,
+  activeFloodStd,
+  setActiveFloodStd,
+  firmPowerRows,
+  floodTableRows,
+  onPreview,
+}: {
+  stepId: number | null;
+  node: ChainNode | undefined;
+  focusScheme: string;
+  activeFloodStd: "P5" | "P0_1" | "P0_01";
+  setActiveFloodStd: (v: "P5" | "P0_1" | "P0_01") => void;
+  firmPowerRows: Array<Record<string, string | number>>;
+  floodTableRows: Array<Record<string, string | number>>;
+  onPreview: () => void;
+}) {
+  const [qUnit, setQUnit] = useState<QUnit>("m3s");
+
+  // 派生带单位的 display rows (只影响 qYear / qIn / qOut 三列字符串)
+  const firmPowerDisplay = useMemo(() => {
+    if (qUnit === "m3s") return firmPowerRows;
+    return firmPowerRows.map((r) => ({
+      ...r,
+      qYear: formatQ(Number(r.qYearRaw), "volume", "year"),
+    }));
+  }, [firmPowerRows, qUnit]);
+
+  const floodDisplay = useMemo(() => {
+    if (qUnit === "m3s") return floodTableRows;
+    return floodTableRows.map((r) => ({
+      ...r,
+      qIn: formatQ(Number(r.qInRaw), "volume", "step"),
+      qOut: formatQ(Number(r.qOutRaw), "volume", "step"),
+    }));
+  }, [floodTableRows, qUnit]);
+
+  // 列定义: 单位随 qUnit 切换
+  const firmColumns = useMemo(
+    () => [
+      { key: "rank", label: "排序", align: "right" as const, sortable: false },
+      { key: "year", label: "年份", align: "right" as const },
+      { key: "power", label: "N", unit: "万kW", align: "right" as const },
+      {
+        key: "qYear",
+        label: "q",
+        unit: qUnit === "m3s" ? "m³/s" : "亿 m³/年",
+        align: "right" as const,
+      },
+      { key: "control", label: "供水期", align: "center" as const, sortable: false },
+      { key: "months", label: "月数", align: "right" as const },
+      { key: "status", label: "收敛", align: "center" as const, sortable: false },
+    ],
+    [qUnit],
+  );
+
+  const floodColumns = useMemo(
+    () => [
+      { key: "step", label: "时段", align: "right" as const },
+      {
+        key: "qIn",
+        label: "Q入",
+        unit: qUnit === "m3s" ? "m³/s" : "万 m³/时段",
+        align: "right" as const,
+      },
+      {
+        key: "qOut",
+        label: "Q出",
+        unit: qUnit === "m3s" ? "m³/s" : "万 m³/时段",
+        align: "right" as const,
+      },
+      { key: "storage", label: "V", unit: "亿m³", align: "right" as const },
+      { key: "level", label: "Z", unit: "m", align: "right" as const },
+    ],
+    [qUnit],
+  );
+
+  if (stepId == null || !node) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-200 bg-white/60 p-4 text-center">
+        <Table2 className="h-6 w-6 text-slate-300 mx-auto mb-1.5" />
+        <p className="text-xs text-slate-500 leading-relaxed">
+          点击左侧任意步骤
+          <br />
+          此处会显示对应的计算真表
+        </p>
+      </div>
+    );
+  }
+
+  if (stepId === 3) {
+    return (
+      <button
+        type="button"
+        onClick={onPreview}
+        className="group block w-full text-left rounded-2xl border bg-white shadow-sm overflow-hidden cursor-zoom-in hover:border-cyan-300 transition-colors"
+      >
+        <div className="p-3 border-b border-slate-100 space-y-1.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono font-bold text-slate-400 tabular-nums">
+              STEP 3
+            </span>
+            <Badge variant="secondary" className="bg-cyan-50 text-cyan-700 text-[10px]">
+              计算真表
+            </Badge>
+            <span className="ml-auto text-[10px] text-slate-400 inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <ZoomIn className="h-3 w-3" />点击放大
+            </span>
+          </div>
+          <h3 className="text-sm font-bold text-slate-800 leading-snug">
+            保证出力逐年计算表
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap pt-0.5" onClick={(e) => e.stopPropagation()}>
+            <span className="text-[10px] text-slate-400">q 列单位:</span>
+            <QUnitToggle unit={qUnit} onChange={setQUnit} />
+          </div>
+        </div>
+        <div className="p-2">
+          <SimpleDataTable
+            columns={firmColumns}
+            rows={firmPowerDisplay}
+            defaultSortKey="power"
+            defaultSortDir="asc"
+            emptyText="暂无逐年出力数据"
+          />
+        </div>
+      </button>
+    );
+  }
+
+  if (stepId === 7) {
+    return (
+      <button
+        type="button"
+        onClick={onPreview}
+        className="group block w-full text-left rounded-2xl border bg-white shadow-sm overflow-hidden cursor-zoom-in hover:border-red-300 transition-colors"
+      >
+        <div className="p-3 border-b border-slate-100 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono font-bold text-slate-400 tabular-nums">
+              STEP 7
+            </span>
+            <Badge variant="secondary" className="bg-red-50 text-red-700 text-[10px]">
+              计算真表
+            </Badge>
+            <span className="ml-auto text-[10px] text-slate-400 inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <ZoomIn className="h-3 w-3" />点击放大
+            </span>
+          </div>
+          <h3 className="text-sm font-bold text-slate-800 leading-snug">
+            调洪逐时段计算表
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+            <InlineSwitcher
+              value={activeFloodStd}
+              options={[
+                { value: "P5", label: "P=5%" },
+                { value: "P0_1", label: "P=0.1%" },
+                { value: "P0_01", label: "P=0.01%" },
+              ]}
+              onChange={setActiveFloodStd}
+            />
+            <span className="text-[10px] text-slate-400 ml-1">Q列:</span>
+            <QUnitToggle unit={qUnit} onChange={setQUnit} />
+          </div>
+        </div>
+        <div className="p-2">
+          <SimpleDataTable
+            columns={floodColumns}
+            rows={floodDisplay}
+            emptyText="暂无调洪演算数据"
+          />
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-white/60 p-4 text-center">
+      <Table2 className="h-6 w-6 text-slate-300 mx-auto mb-1.5" />
+      <p className="text-xs text-slate-500 leading-relaxed">
+        {node.title} · 该步骤暂无独立真表
+      </p>
+      <p className="text-[10px] text-slate-400 mt-1">
+        输入/输出明细已嵌入左侧节点卡
+      </p>
     </div>
   );
 }
@@ -419,13 +849,13 @@ export function CalculationChainPage() {
 
   // --- Node 4 data: installed capacity ---
   const node4Data = useMemo(() => {
-    const data: Record<
+    const data = {} as Record<
       string,
       {
         inst: ReturnType<typeof calcInstalled>;
         repeat: ReturnType<typeof find_repeat_capacity>;
       }
-    > = {} as any;
+    >;
     for (const sk of ["I", "II", "III", "IV"] as const) {
       const Np_wan = waterResults[sk].Np_wan;
       const inst = calcInstalled(Np_wan, sk);
@@ -440,13 +870,21 @@ export function CalculationChainPage() {
   const FOCUS = params.scheme || "II";
 
   // --- Expand state ---
-  const [expanded, setExpanded] = useState<Set<number>>(new Set([9]));
+  const [expanded, setExpanded] = useState<Set<number>>(new Set([7]));
 
   // --- Active step (drives the right-side visual panel) ---
-  const [activeStepId, setActiveStepId] = useState<number | null>(9);
+  const [activeStepId, setActiveStepId] = useState<number | null>(7);
+  const [activeFloodStd, setActiveFloodStd] = useState<"P5" | "P0_1" | "P0_01">("P5");
 
   // --- Image preview modal ---
   const [preview, setPreview] = useState<{ src: string; alt: string } | null>(null);
+  // --- Table preview modal (true 表格点击放大) ---
+  const [tablePreviewStep, setTablePreviewStep] = useState<number | null>(null);
+
+  const focusStep = (id: number) => {
+    setExpanded((prev) => new Set(prev).add(id));
+    setActiveStepId(id);
+  };
 
   const toggle = (id: number) => {
     setExpanded((prev) => {
@@ -466,6 +904,45 @@ export function CalculationChainPage() {
       return next;
     });
   };
+
+  const activeNode = activeStepId == null
+    ? undefined
+    : CHAIN_NODES.find((node) => node.id === activeStepId);
+
+  const firmPowerRows = useMemo(() => {
+    const current = node3Data[FOCUS];
+    if (!current?.year_results) return [];
+    return [...current.year_results]
+      .sort((a, b) => a.N_year - b.N_year)
+      .map((row, index) => ({
+        rank: index + 1,
+        year: row.year,
+        power: (row.N_year / 1e4).toFixed(2),
+        qYear: row.q_year_diff.toFixed(2),
+        qYearRaw: row.q_year_diff,
+        control: `${row.control_start_month} → ${row.control_end_month}`,
+        months: row.n_supply,
+        status: row.converged ? "收敛" : "未收敛",
+      }));
+  }, [FOCUS, node3Data]);
+
+  const floodTableRows = useMemo(() => {
+    const series = floodResults[FOCUS]?.series?.[activeFloodStd];
+    if (!series) return [];
+    return series.Q_in.map((qIn: number, index: number) => {
+      const z = series.Z[index] ?? series.Z[series.Z.length - 1];
+      const qOut = series.Q_out[index] ?? series.Q_out[series.Q_out.length - 1];
+      return {
+        step: index + 1,
+        qIn: qIn.toFixed(2),
+        qOut: qOut.toFixed(2),
+        qInRaw: qIn,
+        qOutRaw: qOut,
+        storage: z_to_v(z).toFixed(2),
+        level: z.toFixed(2),
+      };
+    });
+  }, [FOCUS, activeFloodStd, floodResults]);
 
   // --- Render a single node ---
   const renderNode = (node: ChainNode) => {
@@ -637,8 +1114,15 @@ export function CalculationChainPage() {
             <DataRow label="Z死" value={nd2?.Z_dead.toFixed(2) ?? "—"} unit="m" />
             <DataRow label="Np" value={(waterResults[FOCUS].Np_wan).toFixed(2)} unit="万 kW" />
             <DataRow label="防破坏线周期" value="5月~次年3月" />
-            <DataRow label="防洪限制水位" value="= 正常蓄水位 Z正" />
-            <DataRow label="结合库容 V结合" value={0} unit="亿 m³" />
+            <DataRow
+              label="防洪限制水位"
+              value="= Z正 (简化)"
+            />
+            <DataRow
+              label="结合库容 V结合"
+              value={0}
+              unit="亿 m³ (简化=0)"
+            />
           </>
         );
       case 6:
@@ -842,7 +1326,11 @@ export function CalculationChainPage() {
             <DataRow
               label="防洪限制水位"
               value={SCHEMES[FOCUS].Z_zheng}
-              unit="m (等于 Z正)"
+              unit="m (简化: 取 Z正, V结合=0)"
+            />
+            <DataRow
+              label="任务书方法"
+              value="取 7 月底/8 月初防破坏线坐标"
             />
             <DataRow label="结合库容 V结合" value="0.00" unit="亿 m³" />
             <DataRow
@@ -960,29 +1448,59 @@ export function CalculationChainPage() {
         );
       }
       case 9: {
-        const tblII = tbl?.find((r: any) => r.scheme === FOCUS);
+        const tblII = tbl?.find((r) => r.scheme === FOCUS);
         if (!tblII)
           return <DataRow label="状态" value="计算中..." />;
+        // 重复容量利用小时 h_重 = ΔE / N重  (E 单位 亿 kWh, N 单位 万 kW → h 单位 h)
+        const rep = nd4?.repeat;
+        const E0 = rep?.E_list?.[0] ?? 0;
+        const E_chong = rep?.E_avg_raw ?? 0;
+        const N_chong_val = rep?.N_chong ?? 0;
+        const h_repeat =
+          N_chong_val > 0
+            ? ((E_chong - E0) / N_chong_val) * 1e4
+            : null;
         return (
           <>
             <DataRow label="Z正" value={tblII.Z_zheng} unit="m" />
             <DataRow label="Z死" value={tblII.Z_dead.toFixed(2)} unit="m" highlight />
-            <DataRow label="Z防洪高" value={tblII.Z_fangshou.toFixed(2)} unit="m" />
-            <DataRow label="Z设计" value={tblII.Z_design.toFixed(2)} unit="m" />
-            <DataRow label="Z校核" value={tblII.Z_check.toFixed(2)} unit="m" />
+            <DataRow
+              label="防洪限制水位"
+              value={tblII.Z_xun.toFixed(2)}
+              unit="m"
+            />
+            <DataRow
+              label="防洪高水位 Z防洪高"
+              value={tblII.Z_fangshou.toFixed(2)}
+              unit="m"
+            />
+            <DataRow label="设计洪水位 Z设计" value={tblII.Z_design.toFixed(2)} unit="m" />
+            <DataRow label="校核洪水位 Z校核" value={tblII.Z_check.toFixed(2)} unit="m" />
             <DataRow label="坝顶高程 Z坝" value={tblII.Z_dam.toFixed(2)} unit="m" highlight />
             <DataRow label="总库容 V总" value={tblII.V_total.toFixed(2)} unit="亿 m³" />
             <DataRow label="兴利库容 V兴" value={tblII.V_xing.toFixed(4)} unit="亿 m³" />
             <DataRow label="防洪库容 V防洪" value={tblII.V_fangshou.toFixed(4)} unit="亿 m³" />
             <DataRow label="结合库容 V结合" value={tblII.V_jiehe.toFixed(4)} unit="亿 m³" />
             <DataRow label="保证出力 Np" value={(tblII.Np / 1e4).toFixed(2)} unit="万 kW" highlight />
+            <DataRow
+              label="工作容量 N工"
+              value={tblII.N_ji.toFixed(2)}
+              unit="万 kW"
+            />
+            <DataRow label="备用容量 N备" value={tblII.N_bei.toFixed(2)} unit="万 kW" />
             <DataRow label="必需容量 N必" value={tblII.N_bi.toFixed(2)} unit="万 kW" />
             <DataRow label="重复容量 N重" value={tblII.N_chong.toFixed(2)} unit="万 kW" />
+            <DataRow
+              label="重复容量利用小时 h重"
+              value={h_repeat !== null ? h_repeat.toFixed(0) : "—"}
+              unit="h"
+            />
             <DataRow label="装机容量 N装" value={tblII.N_y.toFixed(2)} unit="万 kW" highlight />
             <DataRow label="多年平均电能 E" value={tblII.E_avg.toFixed(4)} unit="亿 kWh" highlight />
             <DataRow label="设计最大泄量" value={tblII.Q_design_max.toFixed(0)} unit="m³/s" />
             <DataRow label="校核最大泄量" value={tblII.Q_check_max.toFixed(0)} unit="m³/s" />
             <DataRow label="库容系数 β" value={tblII.coef_xing.toFixed(4)} />
+            <DataRow label="调节系数 α" value={tblII.coef_tiao.toFixed(4)} />
             <DataRow label="径流利用系数 η" value={(tblII.eta * 100).toFixed(2)} unit="%" />
           </>
         );
@@ -1033,8 +1551,8 @@ export function CalculationChainPage() {
         </div>
       )}
 
-      {/* 布局: 左链路 + 右可视化 */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-8 max-w-6xl mx-auto">
+      {/* 布局: 左链路 + 右图表 / 真表 */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px] gap-8 max-w-6xl mx-auto">
         {/* Left: Vertical Flow */}
         <div className="relative min-w-0">
           {/* Vertical timeline line behind all nodes */}
@@ -1049,13 +1567,27 @@ export function CalculationChainPage() {
           </div>
         </div>
 
-        {/* Right: Visualization Panel (sticky) */}
-        <aside className="hidden lg:block">
+        {/* Right: 图表 + 真表 (与链路并列, 整片 sticky) */}
+        <aside className="hidden lg:block sticky top-12 self-start space-y-4 max-h-[calc(100vh-3.5rem)] overflow-hidden">
           <StepVisualPanel
             stepId={activeStepId}
             node={CHAIN_NODES.find((n) => n.id === activeStepId)}
             focusScheme={FOCUS}
             onPreview={(src, alt) => setPreview({ src, alt })}
+          />
+          <StepTablePanel
+            stepId={activeStepId}
+            node={CHAIN_NODES.find((n) => n.id === activeStepId)}
+            focusScheme={FOCUS}
+            activeFloodStd={activeFloodStd}
+            setActiveFloodStd={setActiveFloodStd}
+            firmPowerRows={firmPowerRows}
+            floodTableRows={floodTableRows}
+            onPreview={() => {
+              if (activeStepId === 3 || activeStepId === 7) {
+                setTablePreviewStep(activeStepId);
+              }
+            }}
           />
         </aside>
       </div>
@@ -1079,6 +1611,19 @@ export function CalculationChainPage() {
           src={preview.src}
           alt={preview.alt}
           onClose={() => setPreview(null)}
+        />
+      )}
+
+      {/* Table preview modal (lightbox) */}
+      {tablePreviewStep != null && (
+        <TablePreviewModal
+          stepId={tablePreviewStep}
+          focusScheme={FOCUS}
+          activeFloodStd={activeFloodStd}
+          setActiveFloodStd={setActiveFloodStd}
+          firmPowerRows={firmPowerRows}
+          floodTableRows={floodTableRows}
+          onClose={() => setTablePreviewStep(null)}
         />
       )}
     </div>
@@ -1140,6 +1685,178 @@ function ImagePreviewModal({
         onClick={(e) => e.stopPropagation()}
         className="relative max-w-[92vw] max-h-[88vh] rounded-lg shadow-2xl bg-white"
       />
+    </div>
+  );
+}
+
+// ============================================================
+// 表格预览弹窗: 居中放大一张 SimpleDataTable, 复用 ESC/背景模糊
+// ============================================================
+function TablePreviewModal({
+  stepId,
+  focusScheme,
+  activeFloodStd,
+  setActiveFloodStd,
+  firmPowerRows,
+  floodTableRows,
+  onClose,
+}: {
+  stepId: number;
+  focusScheme: string;
+  activeFloodStd: "P5" | "P0_1" | "P0_01";
+  setActiveFloodStd: (v: "P5" | "P0_1" | "P0_01") => void;
+  firmPowerRows: Array<Record<string, string | number>>;
+  floodTableRows: Array<Record<string, string | number>>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  const [qUnit, setQUnit] = useState<QUnit>("m3s");
+
+  const firmPowerDisplay = useMemo(() => {
+    if (qUnit === "m3s") return firmPowerRows;
+    return firmPowerRows.map((r) => ({
+      ...r,
+      qYear: formatQ(Number(r.qYearRaw), "volume", "year"),
+    }));
+  }, [firmPowerRows, qUnit]);
+
+  const floodDisplay = useMemo(() => {
+    if (qUnit === "m3s") return floodTableRows;
+    return floodTableRows.map((r) => ({
+      ...r,
+      qIn: formatQ(Number(r.qInRaw), "volume", "step"),
+      qOut: formatQ(Number(r.qOutRaw), "volume", "step"),
+    }));
+  }, [floodTableRows, qUnit]);
+
+  const firmColumns = useMemo(
+    () => [
+      { key: "rank", label: "排序", align: "right" as const, sortable: false },
+      { key: "year", label: "年份", align: "right" as const },
+      { key: "power", label: "N_year", unit: "万kW", align: "right" as const },
+      {
+        key: "qYear",
+        label: "q_year",
+        unit: qUnit === "m3s" ? "m³/s" : "亿 m³/年",
+        align: "right" as const,
+      },
+      { key: "control", label: "控制供水期", align: "center" as const, sortable: false },
+      { key: "months", label: "供水月数", align: "right" as const },
+      { key: "status", label: "收敛", align: "center" as const, sortable: false },
+    ],
+    [qUnit],
+  );
+
+  const floodColumns = useMemo(
+    () => [
+      { key: "step", label: "时段", align: "right" as const },
+      {
+        key: "qIn",
+        label: "入库流量",
+        unit: qUnit === "m3s" ? "m³/s" : "万 m³/时段",
+        align: "right" as const,
+      },
+      {
+        key: "qOut",
+        label: "下泄流量",
+        unit: qUnit === "m3s" ? "m³/s" : "万 m³/时段",
+        align: "right" as const,
+      },
+      { key: "storage", label: "库蓄水量", unit: "亿m³", align: "right" as const },
+      { key: "level", label: "库蓄水位", unit: "m", align: "right" as const },
+    ],
+    [qUnit],
+  );
+
+  const title =
+    stepId === 3
+      ? `保证出力逐年计算表 · 方案 ${focusScheme}`
+      : `调洪逐时段计算表 · 方案 ${focusScheme}`;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8 bg-slate-900/60 backdrop-blur-md anim-cc-fade-up"
+      onClick={onClose}
+    >
+      {/* Close button (top-right) */}
+      <button
+        onClick={onClose}
+        aria-label="关闭预览"
+        className="absolute top-4 right-4 z-10 rounded-full bg-white/90 hover:bg-white p-2 text-slate-700 shadow-lg transition-colors"
+      >
+        <X className="h-5 w-5" />
+      </button>
+
+      {/* Caption (top-center) */}
+      <div
+        className="absolute top-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700 shadow-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {title}
+      </div>
+
+      {/* Table (clicking it does NOT close) */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-[min(96vw,1100px)] max-h-[88vh] rounded-2xl shadow-2xl bg-white overflow-hidden flex flex-col"
+      >
+        <div className="p-4 border-b border-slate-100 flex items-center gap-3 flex-wrap">
+          <div className="flex-1 min-w-0">
+            <h3 className="text-base font-bold text-slate-800 leading-snug">
+              {title}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              点击列名排序 · 点击空白处或按 ESC 关闭
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500">Q 列单位:</span>
+            <QUnitToggle unit={qUnit} onChange={setQUnit} />
+          </div>
+          {stepId === 7 && (
+            <InlineSwitcher
+              value={activeFloodStd}
+              options={[
+                { value: "P5", label: "P=5% 防洪" },
+                { value: "P0_1", label: "P=0.1% 设计" },
+                { value: "P0_01", label: "P=0.01% 校核" },
+              ]}
+              onChange={setActiveFloodStd}
+            />
+          )}
+        </div>
+        <div className="p-3 flex-1 min-h-0 overflow-auto">
+          {stepId === 3 && (
+            <SimpleDataTable
+              columns={firmColumns}
+              rows={firmPowerDisplay}
+              defaultSortKey="power"
+              defaultSortDir="asc"
+              emptyText="暂无逐年出力数据"
+            />
+          )}
+          {stepId === 7 && (
+            <SimpleDataTable
+              columns={floodColumns}
+              rows={floodDisplay}
+              emptyText="暂无调洪演算数据"
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

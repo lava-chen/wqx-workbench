@@ -129,7 +129,7 @@ export function solveMonthQ(
       q = 1.0;
     }
     // q 上限: 避免越界 q_to_zd
-    const q_upper = Math.max(N_target * N_SCALE / (K * 5.0), Q_in + 1000.0);
+    const q_upper = Math.max(N_target / (K * 5.0), Q_in + 1000.0);
     if (q > q_upper) {
       q = q_upper;
     }
@@ -390,7 +390,7 @@ export function findNpForScheme(
 
   // N_year 升序, 第 failYears 个 (零基) 即为 Np
   const N_sorted = year_results.map((yr) => yr.N_year).sort((a, b) => a - b);
-  const idx = Math.min(failYears, N_sorted.length - 1);
+  const idx = Math.min(Math.max(failYears - 1, 0), N_sorted.length - 1);
   const N_p = N_sorted[idx];
 
   return {

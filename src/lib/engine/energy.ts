@@ -184,7 +184,22 @@ export function find_repeat_capacity(
   candidates: number[]; E_list: number[]; h_uses: number[];
   Q_dump_avg: number;
 } {
-  const candidates = [0, 10, 20, 30, 40, 50, 60, 70].map(d => N_bi + d);
+  // 任务书 p12: 假定若干重复容量 0, ΔN, 2ΔN, ...
+  // 即 NY 扫描起点应为 N_p (N重=0), ΔN 重 是从 0 起的增量, 不是 N_bi 之上再加.
+  // 覆盖 N_p → N_bi + 70 万 kW, 既画出"上升→下降→交 2500h"段,
+  // 也覆盖 N_bi 之后的过装段(供 ny_e.png 完整显示).
+  const step = 10;
+  const N_bi_round = Math.round(N_bi);
+  const N_p_round = Math.round(N_p);
+  const candidates: number[] = [];
+  for (let v = N_p_round; v <= N_bi_round + 70; v += step) {
+    candidates.push(v);
+  }
+  // 保证 N_bi 自身在 candidates 中, 即便它不是 step 的整数倍
+  if (!candidates.includes(N_bi_round)) {
+    candidates.push(N_bi_round);
+    candidates.sort((a, b) => a - b);
+  }
   const E_list: number[] = [];
   const Q_dump_list: number[] = [];
 
@@ -203,13 +218,13 @@ export function find_repeat_capacity(
   let N_chong = 0;
   for (let i = 0; i < h_uses.length; i++) {
     if (h_uses[i] >= H_ECON) {
-      N_chong = candidates[i + 1] - N_bi;
+      N_chong = candidates[i + 1] - Math.round(N_bi);
     } else {
       break;
     }
   }
 
-  const N_Y_final = N_bi + N_chong;
+  const N_Y_final = Math.round(N_bi + N_chong);
   const idx_final = candidates.indexOf(N_Y_final);
   const E_final = E_list[idx_final];
 

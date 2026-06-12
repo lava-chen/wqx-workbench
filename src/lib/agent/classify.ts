@@ -24,6 +24,16 @@ interface ClassifyResult {
 export type { ClassifyResult };
 
 const KEYWORDS: Record<QuestionKind, string[]> = {
+  // 寒暄优先级最高: 用户刚进来打招呼, 应该走轻量路径, 不该背 23 项
+  // 注意: 严格词, 避免 "你好, 23 项是否完成" 也被寒暄截胡
+  //   → "你好" 单独或接 "在吗" 等寒暄词, 才会胜
+  //   → 加 "23" 这类数据词时, checklist 会以更多命中反超
+  greeting: [
+    "你好", "您好", "hi", "hello", "嗨", "哈喽", "哈罗",
+    "在吗", "在么", "在不在",
+    "thanks", "thank you", "谢谢", "多谢", "感谢",
+    "再见", "bye", "拜拜",
+  ],
   checklist: [
     "23", "二十三", "是否完成", "完成度", "任务书", "几项",
     "做了哪些", "完成了哪些", "还有哪些", "全部", "还差",
@@ -57,6 +67,13 @@ const KEYWORDS: Record<QuestionKind, string[]> = {
 };
 
 const FOCUS: Record<QuestionKind, string> = {
+  greeting:
+    "**用户在寒暄或打招呼, 不是问数据**. 你必须**完全切出工程模式**, 不要背 23 项、不要讲方案、不要给引用.\n" +
+    "回答要求:\n" +
+    "1. 简短回应, 像正常人一样打招呼, ≤ 50 字.\n" +
+    "2. 顺手提一句你擅长 5 类问题 (任务书自检 / 方案比选 / 防洪 / 溯源 / 答辩自查), 让用户知道下一步能问啥.\n" +
+    "3. 语气轻松, 不要'请问您需要什么'那种客服腔, 直接'嗨, 我能帮你看 5 类问题, ...'.\n" +
+    "4. 如果用户说'谢谢'/'再见', 就回'不客气'/'再见', 不要再推问题清单.",
   checklist:
     "你正在做 **任务书 23 项指标完成度自检**. 重点是逐项列出哪些已完成、哪些是 partial/missing, 并给出每项的代码证据. " +
     "若某项是 partial 或 missing, 一定要明确指出老师可能质疑的点.",
@@ -84,9 +101,9 @@ const FOCUS: Record<QuestionKind, string> = {
 };
 
 export function classify(question: string): ClassifyResult {
-  const q = question.toLowerCase();
+  const q = question.toLowerCase().trim();
   const hits: Record<QuestionKind, string[]> = {
-    checklist: [], comparison: [], "indicator-source": [],
+    greeting: [], checklist: [], comparison: [], "indicator-source": [],
     "flood-explain": [], recommendation: [], meta: [], free: [],
   };
 
@@ -98,11 +115,10 @@ export function classify(question: string): ClassifyResult {
     }
   }
 
-  // 取命中数最多的 (并列时按优先级顺序取第一)
-  // meta 排在 free 前: 纯 "你能干什么" 类问, meta 胜
-  // 但 checklist > meta: "你能告诉我 23 项是否完成吗" 里 checklist 命中更多, 仍走 checklist
+  // greeting 优先 (放在最前): 避免 "你好" 被 free 吞
+  // 但 checklist/comparison 仍能反超 (因关键词命中数更多)
   const PRIORITY: QuestionKind[] = [
-    "checklist", "comparison", "flood-explain", "indicator-source", "recommendation", "meta", "free",
+    "greeting", "checklist", "comparison", "flood-explain", "indicator-source", "recommendation", "meta", "free",
   ];
   let best: QuestionKind = "free";
   let bestCount = 0;
@@ -123,7 +139,7 @@ export function classify(question: string): ClassifyResult {
     // 默认三个都加 (用户可能问任意指标)
     extra.push("flood", "energy", "xingli");
   }
-  // meta / free / checklist: 不加额外段 (checklist 已经够长, 加了浪费)
+  // greeting / meta / free / checklist: 不加额外段
 
   return {
     kind: best,

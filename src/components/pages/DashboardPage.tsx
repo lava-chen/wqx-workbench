@@ -619,8 +619,18 @@ function FloodMatrix({
 }
 
 // ============================================================
-// ⑤ 防破坏线预览 (用 compute_fangpo_line 跑一次, 取 12 个月蓄水)
+// ⑤ 调度预览 — 用 P=87.5% 分位作"防破坏线", 25/75% 作分位带
+//    (与 fig_dispatch_II.png 的工程含义对齐, 不同于 Z_env 上包络)
 // ============================================================
+
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return NaN;
+  const i = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.floor(q * (sorted.length - 1))),
+  );
+  return sorted[i];
+}
 
 function DispatchPreview({
   currentScheme,
@@ -635,11 +645,35 @@ function DispatchPreview({
 }) {
   const series = useMemo(() => {
     try {
-      const r = compute_fangpo_line(currentScheme, Z_dead, Np_wan, 15);
-      // r.months 是 [4,5,6,...,3], r.Z_env 是对应的水位
-      return r.months.map((m, i) => ({
+      // 用 30 年, 与 DispatchCharts.tsx 保持一致
+      const r = compute_fangpo_line(currentScheme, Z_dead, Np_wan, 30);
+      const months = r.months;
+      // 对每个月, 取所有年的 Z 值, 算 P87.5 / P25 / P75
+      const p875: number[] = [];
+      const p25: number[] = [];
+      const p75: number[] = [];
+      for (const m of months) {
+        const vals: number[] = [];
+        for (const yr of Object.keys(r.all_curves)) {
+          const v = r.all_curves[parseInt(yr)]?.[m];
+          if (v !== undefined && Number.isFinite(v)) vals.push(v);
+        }
+        if (vals.length === 0) {
+          p875.push(NaN);
+          p25.push(NaN);
+          p75.push(NaN);
+        } else {
+          vals.sort((a, b) => a - b);
+          p25.push(percentile(vals, 0.25));
+          p75.push(percentile(vals, 0.75));
+          p875.push(percentile(vals, 0.875));
+        }
+      }
+      return months.map((m, i) => ({
         month: m,
-        z: r.Z_env[i],
+        z: p875[i],   // 防破坏线 = P87.5%
+        lo: p25[i],   // 25% 分位
+        hi: p75[i],   // 75% 分位
       }));
     } catch {
       return null;
@@ -661,13 +695,13 @@ function DispatchPreview({
         <div className="flex items-center gap-2">
           <LineChart className="h-3.5 w-3.5" style={{ color: "var(--accent-color)" }} />
           <span className="text-sm font-medium" style={{ color: "var(--text)" }}>
-            防破坏线预览
+            调度轨迹
           </span>
           <span
             className="text-[10px] font-mono uppercase tracking-wider"
             style={{ color: "var(--muted)" }}
           >
-            12-MONTH · 上包络
+            P87.5 防破坏线 · 25~75% 分位带
           </span>
         </div>
         <span
@@ -704,7 +738,7 @@ function DispatchChart({
   Z_dead,
   monthLabels,
 }: {
-  series: { month: number; z: number }[];
+  series: { month: number; z: number; lo: number; hi: number }[];
   Z_zheng: number;
   Z_dead: number;
   monthLabels: string[];
@@ -715,34 +749,46 @@ function DispatchChart({
   const padBottom = 8;
   const innerH = height - padTop - padBottom;
   // y 轴范围
-  const validZ = series.filter((s) => Number.isFinite(s.z)).map((s) => s.z);
-  const maxZ = Math.max(Z_zheng + 2, ...validZ);
-  const minZ = Math.min(Z_dead - 2, ...validZ);
+  const allZ = series.flatMap((s) =>
+    [s.z, s.lo, s.hi].filter((v) => Number.isFinite(v)),
+  );
+  const maxZ = Math.max(Z_zheng + 1, ...allZ);
+  const minZ = Math.min(Z_dead - 1, ...allZ);
   const range = (maxZ - minZ) || 1;
 
   const points = series.map((s, i) => {
     const x = (i / (series.length - 1)) * width;
-    const y =
-      padTop + (1 - ((Number.isFinite(s.z) ? s.z : minZ) - minZ) / range) * innerH;
-    return { x, y, z: s.z, month: s.month };
+    const z = Number.isFinite(s.z) ? s.z : minZ;
+    const y = padTop + (1 - (z - minZ) / range) * innerH;
+    const loY =
+      Number.isFinite(s.lo)
+        ? padTop + (1 - (s.lo - minZ) / range) * innerH
+        : null;
+    const hiY =
+      Number.isFinite(s.hi)
+        ? padTop + (1 - (s.hi - minZ) / range) * innerH
+        : null;
+    return { x, y, z, loY, hiY, month: s.month };
   });
 
-  // 构造折线 path
+  // 构造折线 path (防破坏线 P87.5)
   const linePath = points
     .map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`))
     .join(" ");
 
-  // 蓄水区 (折线下方)
-  const areaPath =
+  // 25-75% 分位带 (填充)
+  const bandPath =
     `M 0 ${height - padBottom} ` +
-    points.map((p) => `L ${p.x} ${p.y}`).join(" ") +
+    points.map((p) => `L ${p.x} ${p.hiY ?? height}`).join(" ") +
+    " " +
+    [...points].reverse().map((p) => `L ${p.x} ${p.loY ?? height}`).join(" ") +
     ` L ${width} ${height - padBottom} Z`;
 
   // 关键水位参考线
   const zhengY = padTop + (1 - (Z_zheng - minZ) / range) * innerH;
   const deadY = padTop + (1 - (Z_dead - minZ) / range) * innerH;
 
-  // 找最高点
+  // 找最高点 (P87.5 的峰)
   const peak = points.reduce((a, b) => ((b.z > a.z ? b : a)));
 
   return (
@@ -775,13 +821,13 @@ function DispatchChart({
             strokeWidth="0.3"
             strokeDasharray="1 1"
           />
-          {/* 蓄水面积 */}
+          {/* 25-75% 分位带 */}
           <path
-            d={areaPath}
+            d={bandPath}
             fill="var(--accent-color)"
-            fillOpacity="0.12"
+            fillOpacity="0.1"
           />
-          {/* 蓄水线 */}
+          {/* P87.5 防破坏线 */}
           <path
             d={linePath}
             fill="none"
@@ -833,7 +879,17 @@ function DispatchChart({
               className="h-px w-3"
               style={{ backgroundColor: "var(--accent-color)" }}
             />
-            防破坏线
+            P87.5 防破坏
+          </span>
+          <span className="flex items-center gap-1" style={{ color: "var(--muted)" }}>
+            <span
+              className="h-1.5 w-3 rounded-sm"
+              style={{
+                backgroundColor: "var(--accent-color)",
+                opacity: 0.15,
+              }}
+            />
+            25~75% 带
           </span>
           <span className="flex items-center gap-1" style={{ color: "var(--muted)" }}>
             <span
@@ -957,6 +1013,7 @@ function CalcChainCard() {
     </div>
   );
 }
+
 
 // ============================================================
 // ⑦ 快捷导航
@@ -1133,7 +1190,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps = {}) {
           }}
         />
 
-        <div className="relative grid gap-6 p-7 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div className="relative grid gap-6 p-7 lg:grid-cols-[1fr_auto] lg:items-start">
           {/* 左侧: 标题区 */}
           <div>
             <div

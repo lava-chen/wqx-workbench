@@ -25,12 +25,14 @@ import {
   PolarAngleAxis,
   PolarRadiusAxis,
   Radar,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
   Cell,
 } from "recharts";
@@ -318,58 +320,119 @@ export function ChartsPage() {
           ))}
         </TabsList>
 
-        {/* Chart 1: 水位-库容曲线 */}
+        {/* Chart 1: 水位-库容曲线 — 4 方案 2×2 对比 */}
         <TabsContent value="chart1">
-          {chartCard(
-            "水位-库容曲线 (Z-V Curve)",
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={zvData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="V"
-                  label={{
-                    value: "库容 V (亿m³)",
-                    position: "insideBottomRight",
-                    offset: -10,
-                  }}
-                />
-                <YAxis
-                  domain={[40, 150]}
-                  label={{
-                    value: "水位 Z (m)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
-                <Tooltip
-                  formatter={(value: any, name: any) => [
-                    value.toFixed(2),
-                    name,
-                  ]}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="Z"
-                  stroke="#1f77b4"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Z-V 曲线"
-                />
-                {schemeRefLines.map((rl, i) => (
-                  <ReferenceLine
-                    key={i}
-                    y={rl.y}
-                    stroke={rl.stroke}
-                    strokeDasharray={rl.strokeDasharray}
-                    label={{ value: rl.label, position: "insideTopRight" }}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+          <div className="text-xs text-slate-500 px-1 mb-3">
+            4 方案共用同一条 Z-V 曲线（库容是水位的固有函数）。
+            每个子图标注该方案的 Z_正（实线）、Z_死（点划线）和工作区段（V_死-V_正 淡色填充）。
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            {SCHEME_KEYS.map((sk) => {
+              const Z_zheng_adj = SCHEMES[sk].Z_zheng + (params.Z_zheng_offset[sk] || 0);
+              const Z_dead = waterResults[sk]?.Z_dead;
+              const V_zheng = z_to_v(Z_zheng_adj);
+              const V_dead = Z_dead !== undefined ? z_to_v(Z_dead) : undefined;
+              return (
+                <div
+                  key={sk}
+                  className="rounded-lg border bg-card p-3 text-card-foreground shadow-sm"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-sm font-semibold" style={{ color: COLORS[sk] }}>
+                      方案 {sk} · Z-V 曲线
+                    </div>
+                    <div className="text-xs text-slate-500 font-mono">
+                      Z_正 {Z_zheng_adj.toFixed(1)} m ·{" "}
+                      {Z_dead !== undefined
+                        ? `Z_死 ${Z_dead.toFixed(1)} m`
+                        : "Z_死 —"}
+                    </div>
+                  </div>
+                  <div className="h-[280px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={zvData}
+                        margin={{ top: 8, right: 32, left: 4, bottom: 8 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                        <XAxis
+                          dataKey="V"
+                          tick={{ fontSize: 9 }}
+                          label={{
+                            value: "库容 V (亿m³)",
+                            position: "insideBottomRight",
+                            offset: -4,
+                            fontSize: 9,
+                          }}
+                        />
+                        <YAxis
+                          domain={[40, 150]}
+                          allowDataOverflow={false}
+                          tick={{ fontSize: 9 }}
+                          label={{
+                            value: "水位 Z (m)",
+                            angle: -90,
+                            position: "insideLeft",
+                            fontSize: 9,
+                          }}
+                        />
+                        <Tooltip
+                          formatter={(value: any) => [value.toFixed(2), ""]}
+                          labelFormatter={(v: any) => `V = ${v} 亿m³`}
+                        />
+                        {/* 工作区段填色 V_死-V_正（仅在该子图内） */}
+                        {V_dead !== undefined && (
+                          <ReferenceArea
+                            x1={V_dead}
+                            x2={V_zheng}
+                            y1={40}
+                            y2={150}
+                            fill={COLORS[sk]}
+                            fillOpacity={0.08}
+                            stroke="none"
+                          />
+                        )}
+                        <Line
+                          type="monotone"
+                          dataKey="Z"
+                          stroke="#1f77b4"
+                          strokeWidth={2}
+                          dot={false}
+                          name="Z-V 曲线"
+                          isAnimationActive={false}
+                        />
+                        <ReferenceLine
+                          y={Z_zheng_adj}
+                          stroke={COLORS[sk]}
+                          strokeWidth={1.6}
+                          label={{
+                            value: `Z_正 ${Z_zheng_adj.toFixed(1)}`,
+                            position: "insideTopRight",
+                            fontSize: 9,
+                            fill: COLORS[sk],
+                          }}
+                        />
+                        {Z_dead !== undefined && (
+                          <ReferenceLine
+                            y={Z_dead}
+                            stroke={COLORS[sk]}
+                            strokeWidth={1.4}
+                            strokeDasharray="6 2 1 2"
+                            label={{
+                              value: `Z_死 ${Z_dead.toFixed(1)}`,
+                              position: "insideBottomRight",
+                              fontSize: 9,
+                              fill: COLORS[sk],
+                            }}
+                          />
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </TabsContent>
 
         {/* Chart 2: 下游水位-流量曲线 with current Q_SAFE */}
@@ -379,42 +442,58 @@ export function ChartsPage() {
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={zqData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
+                margin={{ top: 30, right: 50, left: 24, bottom: 14 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                 <XAxis
                   dataKey="Q"
+                  tick={{ fontSize: 10 }}
                   label={{
                     value: "流量 q (m³/s)",
                     position: "insideBottomRight",
-                    offset: -10,
+                    offset: -8,
+                    fontSize: 10,
                   }}
                 />
                 <YAxis
+                  tick={{ fontSize: 10 }}
+                  domain={[
+                    (dataMin: number) => Math.floor(dataMin * 10) / 10 - 0.2,
+                    (dataMax: number) => Math.ceil(dataMax * 10) / 10 + 0.2,
+                  ]}
+                  allowDataOverflow={false}
                   label={{
                     value: "下游水位 Z (m)",
                     angle: -90,
                     position: "insideLeft",
+                    fontSize: 10,
+                    offset: 14,
                   }}
                 />
                 <Tooltip
-                  formatter={(value: any) => [value.toFixed(1), ""]}
+                  formatter={(value: any) => [Number(value).toFixed(2), "Z (m)"]}
+                  labelFormatter={(v: any) => `q = ${v} m³/s`}
                 />
                 <Line
                   type="monotone"
                   dataKey="Z"
                   stroke="#2ca02c"
-                  strokeWidth={2}
+                  strokeWidth={2.2}
                   dot={false}
                   name="Z-q 曲线"
+                  isAnimationActive={false}
                 />
                 <ReferenceLine
                   x={params.Q_SAFE}
                   stroke="#d62728"
+                  strokeWidth={1.4}
                   strokeDasharray={params.Q_SAFE !== ENGINE_Q_SAFE ? "4 4" : "6 4"}
                   label={{
-                    value: `Q安=${params.Q_SAFE} m³/s${params.Q_SAFE !== ENGINE_Q_SAFE ? " (调整)" : ""}`,
-                    position: "top",
+                    value: `Q_安 = ${params.Q_SAFE} m³/s${params.Q_SAFE !== ENGINE_Q_SAFE ? " (调整)" : ""}`,
+                    position: "insideTopRight",
+                    fontSize: 10,
+                    fill: "#d62728",
+                    offset: 6,
                   }}
                 />
               </LineChart>
@@ -429,23 +508,57 @@ export function ChartsPage() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={econBarData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
+                margin={{ top: 30, right: 36, left: 20, bottom: 12 }}
                 barCategoryGap="20%"
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="scheme" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                 <YAxis
+                  tick={{ fontSize: 10 }}
+                  allowDataOverflow={false}
                   label={{
                     value: "万元",
                     angle: -90,
                     position: "insideLeft",
+                    fontSize: 10,
+                    offset: 12,
                   }}
                 />
-                <Tooltip formatter={(value: any) => [value.toLocaleString(), ""]} />
-                <Legend />
-                <Bar dataKey="枢纽总投资" fill="#1f77b4" name="枢纽总投资" />
-                <Bar dataKey="年运行费" fill="#ff7f0e" name="年运行费" />
-                <Bar dataKey="年费用" fill="#2ca02c" name="年费用" />
+                <Tooltip
+                  formatter={(value: any, name: any) => [
+                    Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " 万元",
+                    name,
+                  ]}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="枢纽总投资" fill="#1f77b4" name="枢纽总投资">
+                  <LabelList
+                    dataKey="枢纽总投资"
+                    position="top"
+                    fontSize={10}
+                    formatter={(v: any) =>
+                      Number(v) >= 1e4
+                        ? (v / 1e4).toFixed(2) + " 亿"
+                        : v.toFixed(0)
+                    }
+                  />
+                </Bar>
+                <Bar dataKey="年运行费" fill="#ff7f0e" name="年运行费">
+                  <LabelList
+                    dataKey="年运行费"
+                    position="top"
+                    fontSize={10}
+                    formatter={(v: any) => v.toFixed(0)}
+                  />
+                </Bar>
+                <Bar dataKey="年费用" fill="#2ca02c" name="年费用">
+                  <LabelList
+                    dataKey="年费用"
+                    position="top"
+                    fontSize={10}
+                    formatter={(v: any) => v.toFixed(0)}
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -458,30 +571,50 @@ export function ChartsPage() {
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={nyData}
-                margin={{ top: 20, right: 30, left: 20, bottom: 10 }}
+                margin={{ top: 30, right: 50, left: 20, bottom: 12 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="scheme" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                 <YAxis
                   yAxisId="left"
+                  tick={{ fontSize: 10 }}
+                  allowDataOverflow={false}
                   label={{
-                    value: "装机容量 N_Y (万kW)",
+                    value: "N_Y (万kW)",
                     angle: -90,
                     position: "insideLeft",
+                    fontSize: 10,
+                    offset: 12,
                   }}
                 />
                 <YAxis
                   yAxisId="right"
                   orientation="right"
+                  tick={{ fontSize: 10 }}
+                  allowDataOverflow={false}
                   label={{
-                    value: "多年平均电能 E_avg (亿度)",
+                    value: "E_avg (亿kW·h)",
                     angle: 90,
                     position: "insideRight",
+                    fontSize: 10,
+                    offset: 12,
                   }}
                 />
-                <Tooltip />
-                <Legend />
-                <Bar yAxisId="left" dataKey="N_Y" name="装机容量" barSize={40}>
+                <Tooltip
+                  formatter={(value: any, name: any) => {
+                    if (name === "装机容量") return [`${Number(value).toFixed(1)} 万kW`, name];
+                    if (name === "多年平均电能") return [`${Number(value).toFixed(2)} 亿kW·h`, name];
+                    return [value, name];
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar yAxisId="left" dataKey="N_Y" name="装机容量" barSize={42}>
+                  <LabelList
+                    dataKey="N_Y"
+                    position="top"
+                    fontSize={10}
+                    formatter={(v: any) => v.toFixed(1)}
+                  />
                   {nyData.map((entry) => (
                     <Cell key={entry._key} fill={COLORS[entry._key]} />
                   ))}
@@ -492,8 +625,19 @@ export function ChartsPage() {
                   dataKey="E_avg"
                   name="多年平均电能"
                   stroke="#8884d8"
-                  strokeWidth={2}
-                />
+                  strokeWidth={2.2}
+                  dot={{ r: 4, fill: "#8884d8" }}
+                  activeDot={{ r: 6 }}
+                  isAnimationActive={false}
+                >
+                  <LabelList
+                    dataKey="E_avg"
+                    position="top"
+                    fontSize={10}
+                    offset={8}
+                    formatter={(v: any) => v.toFixed(2)}
+                  />
+                </Line>
               </ComposedChart>
             </ResponsiveContainer>
           )}
@@ -502,20 +646,24 @@ export function ChartsPage() {
         {/* Chart 5: 方案指标雷达图 */}
         <TabsContent value="chart5">
           {chartCard(
-            "方案指标雷达图对比",
+            "方案指标雷达图对比（按方案归一化 0-100）",
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart
                 data={radarData}
                 cx="50%"
                 cy="50%"
-                outerRadius="75%"
+                outerRadius="70%"
+                margin={{ top: 16, right: 32, left: 32, bottom: 16 }}
               >
-                <PolarGrid />
-                <PolarAngleAxis dataKey="metric" tick={{ fontSize: 12 }} />
+                <PolarGrid strokeDasharray="3 3" stroke="#D1D5DB" />
+                <PolarAngleAxis
+                  dataKey="metric"
+                  tick={{ fontSize: 11, fill: "#374151" }}
+                />
                 <PolarRadiusAxis
                   angle={90}
                   domain={[0, 100]}
-                  tick={false}
+                  tick={{ fontSize: 9, fill: "#9CA3AF" }}
                   axisLine={false}
                 />
                 {SCHEME_KEYS.map((sk) => (
@@ -525,11 +673,18 @@ export function ChartsPage() {
                     dataKey={sk}
                     stroke={COLORS[sk]}
                     fill={COLORS[sk]}
-                    fillOpacity={0.15}
+                    fillOpacity={0.12}
                     strokeWidth={2}
+                    isAnimationActive={false}
                   />
                 ))}
-                <Legend />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value: any, name: any) => [
+                    Number(value).toFixed(1) + " / 100",
+                    name,
+                  ]}
+                />
               </RadarChart>
             </ResponsiveContainer>
           )}
@@ -538,26 +693,39 @@ export function ChartsPage() {
         {/* Chart 6: 多年平均电能对比 */}
         <TabsContent value="chart6">
           {chartCard(
-            "多年平均电能 E_avg 对比 (亿度)",
+            "多年平均电能 E_avg 对比 (亿kW·h)",
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={energyBarData}
-                margin={{ top: 30, right: 30, left: 20, bottom: 10 }}
+                margin={{ top: 36, right: 36, left: 20, bottom: 12 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="scheme" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                 <YAxis
+                  tick={{ fontSize: 10 }}
+                  allowDataOverflow={false}
                   label={{
-                    value: "亿度",
+                    value: "亿kW·h",
                     angle: -90,
                     position: "insideLeft",
+                    fontSize: 10,
+                    offset: 12,
                   }}
                 />
-                <Tooltip formatter={(value: any) => [value.toFixed(2), "亿度"]} />
+                <Tooltip
+                  formatter={(value: any) => [
+                    `${Number(value).toFixed(2)} 亿kW·h`,
+                    "E_avg",
+                  ]}
+                />
                 <Bar
                   dataKey="E_avg"
                   name="多年平均电能"
-                  label={{ position: "top", fontSize: 12 }}
+                  label={{
+                    position: "top",
+                    fontSize: 11,
+                    formatter: (v: any) => Number(v).toFixed(2),
+                  }}
                 >
                   {energyBarData.map((entry) => (
                     <Cell key={entry._key} fill={COLORS[entry._key]} />
@@ -571,26 +739,39 @@ export function ChartsPage() {
         {/* Chart 7: 装机利用小时数对比 */}
         <TabsContent value="chart7">
           {chartCard(
-            "装机利用小时数对比 (小时)",
+            "装机利用小时数对比 (h)",
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={energyBarData}
-                margin={{ top: 30, right: 30, left: 20, bottom: 10 }}
+                margin={{ top: 36, right: 36, left: 20, bottom: 12 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="scheme" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                 <YAxis
+                  tick={{ fontSize: 10 }}
+                  allowDataOverflow={false}
                   label={{
-                    value: "小时",
+                    value: "h",
                     angle: -90,
                     position: "insideLeft",
+                    fontSize: 10,
+                    offset: 12,
                   }}
                 />
-                <Tooltip formatter={(value: any) => [value.toLocaleString(), "小时"]} />
+                <Tooltip
+                  formatter={(value: any) => [
+                    `${Number(value).toLocaleString()} h`,
+                    "装机利用小时数",
+                  ]}
+                />
                 <Bar
                   dataKey="利用小时数"
                   name="装机利用小时数"
-                  label={{ position: "top", fontSize: 12 }}
+                  label={{
+                    position: "top",
+                    fontSize: 11,
+                    formatter: (v: any) => Number(v).toLocaleString(),
+                  }}
                 >
                   {energyBarData.map((entry) => (
                     <Cell key={entry._key} fill={COLORS[entry._key]} />
@@ -696,45 +877,100 @@ export function ChartsPage() {
           全部图表一览
         </h2>
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {/* 水位-库容曲线 */}
-          <Card>
-            <CardHeader>
-              <CardTitle>水位-库容曲线 (Z-V Curve)</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[350px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={zvData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="V"
-                    label={{ value: "库容 V (亿m³)", position: "insideBottomRight", offset: -5 }}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis
-                    domain={[40, 150]}
-                    label={{ value: "水位 Z (m)", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <Tooltip formatter={(value: any) => [value.toFixed(2), ""]} />
-                  <Line
-                    type="monotone"
-                    dataKey="Z"
-                    stroke="#1f77b4"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  {schemeRefLines.map((rl, i) => (
-                    <ReferenceLine
-                      key={i}
-                      y={rl.y}
-                      stroke={rl.stroke}
-                      strokeDasharray={rl.strokeDasharray}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+          {/* 水位-库容曲线 — 4 方案 2×2 (跨两列) */}
+          <div className="xl:col-span-2 rounded-lg border bg-card p-3 text-card-foreground shadow-sm">
+            <div className="text-base font-semibold leading-none tracking-tight mb-2">
+              水位-库容曲线 (Z-V Curve) · 4 方案对比
+            </div>
+            <div className="text-xs text-slate-500 mb-2">
+              每方案标注 Z_正（实线）+ Z_死（点划）+ 工作区段（淡色填充 V_死-V_正）。
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+              {SCHEME_KEYS.map((sk) => {
+                const Z_zheng_adj = SCHEMES[sk].Z_zheng + (params.Z_zheng_offset[sk] || 0);
+                const Z_dead = waterResults[sk]?.Z_dead;
+                const V_zheng = z_to_v(Z_zheng_adj);
+                const V_dead = Z_dead !== undefined ? z_to_v(Z_dead) : undefined;
+                return (
+                  <div key={sk} className="border rounded p-2">
+                    <div className="text-xs font-semibold mb-1" style={{ color: COLORS[sk] }}>
+                      方案 {sk} · Z_正 {Z_zheng_adj.toFixed(1)} m{Z_dead !== undefined ? ` · Z_死 ${Z_dead.toFixed(1)} m` : ""}
+                    </div>
+                    <div className="h-[220px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={zvData}
+                          margin={{ top: 6, right: 28, left: 4, bottom: 4 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                          <XAxis dataKey="V" tick={{ fontSize: 8 }} />
+                          <YAxis
+                            domain={[40, 150]}
+                            allowDataOverflow={false}
+                            tick={{ fontSize: 8 }}
+                            label={{
+                              value: "Z (m)",
+                              angle: -90,
+                              position: "insideLeft",
+                              fontSize: 8,
+                            }}
+                          />
+                          <Tooltip
+                            formatter={(value: any) => [value.toFixed(2), ""]}
+                            labelFormatter={(v: any) => `V = ${v} 亿m³`}
+                          />
+                          {V_dead !== undefined && (
+                            <ReferenceArea
+                              x1={V_dead}
+                              x2={V_zheng}
+                              y1={40}
+                              y2={150}
+                              fill={COLORS[sk]}
+                              fillOpacity={0.08}
+                              stroke="none"
+                            />
+                          )}
+                          <Line
+                            type="monotone"
+                            dataKey="Z"
+                            stroke="#1f77b4"
+                            strokeWidth={1.6}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                          <ReferenceLine
+                            y={Z_zheng_adj}
+                            stroke={COLORS[sk]}
+                            strokeWidth={1.4}
+                            label={{
+                              value: `Z_正`,
+                              position: "insideTopRight",
+                              fontSize: 8,
+                              fill: COLORS[sk],
+                            }}
+                          />
+                          {Z_dead !== undefined && (
+                            <ReferenceLine
+                              y={Z_dead}
+                              stroke={COLORS[sk]}
+                              strokeWidth={1.2}
+                              strokeDasharray="6 2 1 2"
+                              label={{
+                                value: `Z_死`,
+                                position: "insideBottomRight",
+                                fontSize: 8,
+                                fill: COLORS[sk],
+                              }}
+                            />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           {/* 下游水位-流量曲线 */}
           <Card>
@@ -743,32 +979,44 @@ export function ChartsPage() {
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={zqData}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                <LineChart
+                  data={zqData}
+                  margin={{ top: 24, right: 50, left: 20, bottom: 12 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis
                     dataKey="Q"
-                    label={{ value: "流量 q (m³/s)", position: "insideBottomRight", offset: -5 }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "流量 q (m³/s)", position: "insideBottomRight", offset: -5, fontSize: 10 }}
+                    tick={{ fontSize: 10 }}
                   />
                   <YAxis
-                    label={{ value: "下游水位 Z (m)", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "下游水位 Z (m)", angle: -90, position: "insideLeft", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
-                  <Tooltip formatter={(value: any) => [value.toFixed(1), ""]} />
+                  <Tooltip
+                    formatter={(value: any) => [Number(value).toFixed(2), "Z (m)"]}
+                    labelFormatter={(v: any) => `q = ${v} m³/s`}
+                  />
                   <Line
                     type="monotone"
                     dataKey="Z"
                     stroke="#2ca02c"
-                    strokeWidth={2}
+                    strokeWidth={2.2}
                     dot={false}
+                    isAnimationActive={false}
                   />
                   <ReferenceLine
                     x={params.Q_SAFE}
                     stroke="#d62728"
+                    strokeWidth={1.4}
                     strokeDasharray={params.Q_SAFE !== ENGINE_Q_SAFE ? "4 4" : "6 4"}
                     label={{
-                      value: `Q安=${params.Q_SAFE}`,
-                      position: "top",
+                      value: `Q_安 = ${params.Q_SAFE} m³/s${params.Q_SAFE !== ENGINE_Q_SAFE ? " (调整)" : ""}`,
+                      position: "insideTopRight",
+                      fontSize: 10,
+                      fill: "#d62728",
+                      offset: 6,
                     }}
                   />
                 </LineChart>
@@ -779,22 +1027,57 @@ export function ChartsPage() {
           {/* 经济对比柱状图 */}
           <Card className="xl:col-span-2">
             <CardHeader>
-              <CardTitle>经济对比 — 方案 I / II / III / IV</CardTitle>
+              <CardTitle>经济对比 — 方案 I / II / III / IV (万元)</CardTitle>
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={econBarData} barCategoryGap="20%">
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
+                <BarChart
+                  data={econBarData}
+                  margin={{ top: 30, right: 36, left: 20, bottom: 12 }}
+                  barCategoryGap="20%"
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                  <XAxis dataKey="scheme" tick={{ fontSize: 10 }} />
                   <YAxis
-                    label={{ value: "万元", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "万元", angle: -90, position: "insideLeft", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
-                  <Tooltip formatter={(value: any) => [value.toLocaleString(), ""]} />
-                  <Legend />
-                  <Bar dataKey="枢纽总投资" fill="#1f77b4" name="枢纽总投资" />
-                  <Bar dataKey="年运行费" fill="#ff7f0e" name="年运行费" />
-                  <Bar dataKey="年费用" fill="#2ca02c" name="年费用" />
+                  <Tooltip
+                    formatter={(value: any, name: any) => [
+                      Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 }) + " 万元",
+                      name,
+                    ]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar dataKey="枢纽总投资" fill="#1f77b4" name="枢纽总投资">
+                    <LabelList
+                      dataKey="枢纽总投资"
+                      position="top"
+                      fontSize={10}
+                      formatter={(v: any) =>
+                        Number(v) >= 1e4
+                          ? (v / 1e4).toFixed(2) + " 亿"
+                          : v.toFixed(0)
+                      }
+                    />
+                  </Bar>
+                  <Bar dataKey="年运行费" fill="#ff7f0e" name="年运行费">
+                    <LabelList
+                      dataKey="年运行费"
+                      position="top"
+                      fontSize={10}
+                      formatter={(v: any) => v.toFixed(0)}
+                    />
+                  </Bar>
+                  <Bar dataKey="年费用" fill="#2ca02c" name="年费用">
+                    <LabelList
+                      dataKey="年费用"
+                      position="top"
+                      fontSize={10}
+                      formatter={(v: any) => v.toFixed(0)}
+                    />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -807,23 +1090,40 @@ export function ChartsPage() {
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={nyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                <ComposedChart
+                  data={nyData}
+                  margin={{ top: 30, right: 50, left: 20, bottom: 12 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                   <YAxis
                     yAxisId="left"
-                    label={{ value: "N_Y (万kW)", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "N_Y (万kW)", angle: -90, position: "insideLeft", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
                   <YAxis
                     yAxisId="right"
                     orientation="right"
-                    label={{ value: "E_avg (亿度)", angle: 90, position: "insideRight" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "E_avg (亿kW·h)", angle: 90, position: "insideRight", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
-                  <Tooltip />
-                  <Legend />
-                  <Bar yAxisId="left" dataKey="N_Y" name="装机容量" barSize={40}>
+                  <Tooltip
+                    formatter={(value: any, name: any) => {
+                      if (name === "装机容量") return [`${Number(value).toFixed(1)} 万kW`, name];
+                      if (name === "多年平均电能") return [`${Number(value).toFixed(2)} 亿kW·h`, name];
+                      return [value, name];
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar yAxisId="left" dataKey="N_Y" name="装机容量" barSize={42}>
+                    <LabelList
+                      dataKey="N_Y"
+                      position="top"
+                      fontSize={10}
+                      formatter={(v: any) => v.toFixed(1)}
+                    />
                     {nyData.map((entry) => (
                       <Cell key={entry._key} fill={COLORS[entry._key]} />
                     ))}
@@ -834,8 +1134,19 @@ export function ChartsPage() {
                     dataKey="E_avg"
                     name="多年平均电能"
                     stroke="#8884d8"
-                    strokeWidth={2}
-                  />
+                    strokeWidth={2.2}
+                    dot={{ r: 4, fill: "#8884d8" }}
+                    activeDot={{ r: 6 }}
+                    isAnimationActive={false}
+                  >
+                    <LabelList
+                      dataKey="E_avg"
+                      position="top"
+                      fontSize={10}
+                      offset={8}
+                      formatter={(v: any) => v.toFixed(2)}
+                    />
+                  </Line>
                 </ComposedChart>
               </ResponsiveContainer>
             </CardContent>
@@ -844,14 +1155,27 @@ export function ChartsPage() {
           {/* 方案指标雷达图 */}
           <Card>
             <CardHeader>
-              <CardTitle>方案指标雷达图对比</CardTitle>
+              <CardTitle>方案指标雷达图对比（0-100 归一化）</CardTitle>
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="70%">
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10 }} />
-                  <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+                <RadarChart
+                  data={radarData}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius="68%"
+                >
+                  <PolarGrid strokeDasharray="3 3" stroke="#D1D5DB" />
+                  <PolarAngleAxis
+                    dataKey="metric"
+                    tick={{ fontSize: 10, fill: "#374151" }}
+                  />
+                  <PolarRadiusAxis
+                    angle={90}
+                    domain={[0, 100]}
+                    tick={{ fontSize: 8, fill: "#9CA3AF" }}
+                    axisLine={false}
+                  />
                   {SCHEME_KEYS.map((sk) => (
                     <Radar
                       key={sk}
@@ -859,11 +1183,15 @@ export function ChartsPage() {
                       dataKey={sk}
                       stroke={COLORS[sk]}
                       fill={COLORS[sk]}
-                      fillOpacity={0.15}
+                      fillOpacity={0.12}
                       strokeWidth={2}
+                      isAnimationActive={false}
                     />
                   ))}
-                  <Legend />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value: any) => [Number(value).toFixed(1) + " / 100", ""]}
+                  />
                 </RadarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -872,19 +1200,36 @@ export function ChartsPage() {
           {/* 多年平均电能对比 */}
           <Card>
             <CardHeader>
-              <CardTitle>多年平均电能 E_avg 对比 (亿度)</CardTitle>
+              <CardTitle>多年平均电能 E_avg 对比 (亿kW·h)</CardTitle>
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={energyBarData} margin={{ top: 25 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                <BarChart
+                  data={energyBarData}
+                  margin={{ top: 32, right: 32, left: 20, bottom: 12 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                   <YAxis
-                    label={{ value: "亿度", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "亿kW·h", angle: -90, position: "insideLeft", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
-                  <Tooltip formatter={(value: any) => [value.toFixed(2), "亿度"]} />
-                  <Bar dataKey="E_avg" name="多年平均电能" label={{ position: "top", fontSize: 11 }}>
+                  <Tooltip
+                    formatter={(value: any) => [
+                      `${Number(value).toFixed(2)} 亿kW·h`,
+                      "E_avg",
+                    ]}
+                  />
+                  <Bar
+                    dataKey="E_avg"
+                    name="多年平均电能"
+                    label={{
+                      position: "top",
+                      fontSize: 11,
+                      formatter: (v: any) => Number(v).toFixed(2),
+                    }}
+                  >
                     {energyBarData.map((entry) => (
                       <Cell key={entry._key} fill={COLORS[entry._key]} />
                     ))}
@@ -897,22 +1242,35 @@ export function ChartsPage() {
           {/* 装机利用小时数对比 */}
           <Card>
             <CardHeader>
-              <CardTitle>装机利用小时数对比 (小时)</CardTitle>
+              <CardTitle>装机利用小时数对比 (h)</CardTitle>
             </CardHeader>
             <CardContent className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={energyBarData} margin={{ top: 25 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                <BarChart
+                  data={energyBarData}
+                  margin={{ top: 32, right: 32, left: 20, bottom: 12 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="scheme" tick={{ fontSize: 11 }} />
                   <YAxis
-                    label={{ value: "小时", angle: -90, position: "insideLeft" }}
-                    tick={{ fontSize: 11 }}
+                    label={{ value: "h", angle: -90, position: "insideLeft", fontSize: 10, offset: 12 }}
+                    tick={{ fontSize: 10 }}
+                    allowDataOverflow={false}
                   />
-                  <Tooltip formatter={(value: any) => [value.toLocaleString(), "小时"]} />
+                  <Tooltip
+                    formatter={(value: any) => [
+                      `${Number(value).toLocaleString()} h`,
+                      "装机利用小时数",
+                    ]}
+                  />
                   <Bar
                     dataKey="利用小时数"
                     name="装机利用小时数"
-                    label={{ position: "top", fontSize: 11 }}
+                    label={{
+                      position: "top",
+                      fontSize: 11,
+                      formatter: (v: any) => Number(v).toLocaleString(),
+                    }}
                   >
                     {energyBarData.map((entry) => (
                       <Cell key={entry._key} fill={COLORS[entry._key]} />
