@@ -87,19 +87,6 @@ interface FloodChartBundle {
   Q_safe: number;
 }
 
-interface FloodTooltipItem {
-  color?: string;
-  stroke?: string;
-  name?: string;
-  value?: number;
-}
-
-interface FloodTooltipProps {
-  active?: boolean;
-  payload?: FloodTooltipItem[];
-  label?: number | string;
-}
-
 function buildFloodData(
   stdKey: string,
   floodResults: FloodResultWithSeries | undefined,
@@ -252,7 +239,7 @@ function FloodRoutingChart({
               }}
             />
             <Tooltip
-              content={({ active, payload, label }: FloodTooltipProps) => {
+              content={({ active, payload, label }) => {
                 if (!active || !payload || payload.length === 0) return null;
                 return (
                   <div className="rounded-md border bg-white/95 px-3 py-2 text-xs shadow-md">

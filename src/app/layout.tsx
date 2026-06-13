@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ExternalLink } from "lucide-react";
 import { ThemeProvider } from "./theme-provider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import "katex/dist/katex.min.css";
@@ -36,6 +37,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-color)]" />
                   水利计算可复核决策工作台
                 </span>
+                <a
+                  href="https://github.com/lava-chen/wqx-workbench"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="GitHub 仓库"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] btn-press"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
                 <ThemeToggle />
               </div>
             </div>

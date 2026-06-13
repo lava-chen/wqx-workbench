@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   GitBranch,
@@ -18,6 +19,7 @@ import { SensitivityPage } from "@/components/pages/SensitivityPage";
 import { DataPage } from "@/components/pages/DataPage";
 import { DashboardPage } from "@/components/pages/DashboardPage";
 import { ParamsProvider } from "@/hooks/useParams";
+import { DatasetProvider } from "@/hooks/useDataset";
 
 const tabs = [
   { id: "dashboard", label: "观测台", icon: LayoutDashboard },
@@ -31,6 +33,7 @@ const tabs = [
 
 function HomeContent() {
   const [activeTab, setActiveTab] = useState("dashboard");
+  const isAgentTab = activeTab === "agent";
 
   return (
     <div className="h-screen overflow-hidden flex flex-col">
@@ -65,7 +68,12 @@ function HomeContent() {
       </div>
 
       {/* Page Content */}
-      <main className="flex-1 min-h-0 max-w-7xl mx-auto px-6 py-6 w-full flex flex-col overflow-y-auto">
+      <main
+        className={cn(
+          "flex-1 min-h-0 max-w-7xl mx-auto px-6 w-full flex flex-col",
+          isAgentTab ? "py-4 overflow-hidden" : "py-6 overflow-y-auto",
+        )}
+      >
         {activeTab === "dashboard" && <DashboardPage onNavigate={setActiveTab} />}
         {activeTab === "params" && <SensitivityPage />}
         {activeTab === "overview" && <SchemeEditorPage />}
@@ -80,8 +88,10 @@ function HomeContent() {
 
 export default function Home() {
   return (
-    <ParamsProvider>
-      <HomeContent />
-    </ParamsProvider>
+    <DatasetProvider>
+      <ParamsProvider>
+        <HomeContent />
+      </ParamsProvider>
+    </DatasetProvider>
   );
 }

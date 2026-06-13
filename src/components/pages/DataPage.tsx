@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   Database,
@@ -15,6 +15,14 @@ import {
   Sigma,
   Layers,
   ArrowUpRight,
+  Download,
+  Upload,
+  RotateCcw,
+  PencilLine,
+  X,
+  Check,
+  AlertTriangle,
+  FileJson,
 } from "lucide-react";
 import {
   LineChart,
@@ -95,6 +103,14 @@ import {
   get_Q_AVG_MS,
   get_ANNUAL_RUNOFF_YI,
 } from "@/lib/engine";
+import {
+  useDataset,
+  SCALAR_FIELDS,
+  SCALAR_FIELDS_BY_KEY,
+  DatasetImportError,
+  downloadJson,
+  type ScalarKey,
+} from "@/hooks/useDataset";
 
 // ============================================================
 // 常量
@@ -171,40 +187,70 @@ function textColor(t: number): string {
 // ============================================================
 
 interface StatDef {
+  /** 可编辑标量键; undefined 表示只读 (derived 值) */
+  key?: ScalarKey;
   label: string;
   value: string;
   raw: number | string;
   unit?: string;
   hint?: string;
+  /** 当 key 存在且 useDataset 给出当前值时, 用 input 编辑; 否则只读 */
+  editable?: boolean;
+  step?: number;
+  min?: number;
+  max?: number;
+  format?: (v: number) => string;
 }
 
 function OverviewTab() {
+  const { data, isHydrated, setScalar } = useDataset();
+
   const stats: StatDef[] = useMemo(() => {
     const qavg = get_Q_AVG_MS();
     const ayi = get_ANNUAL_RUNOFF_YI();
+    const s = data.scalars;
     return [
-      { label: "下游安全泄量 Q安", value: fmtInt(Q_SAFE), raw: Q_SAFE, unit: "m³/s", hint: "影响调洪演算" },
-      { label: "经济折算率 r₀", value: fmt(R0, 2), raw: R0, unit: "—", hint: "影响年费用比较" },
-      { label: "设计频率 P设", value: fmtPct(P_DESIGN), raw: P_DESIGN, hint: "1000 年一遇" },
-      { label: "校核频率 P校", value: fmtPct(P_CHECK), raw: P_CHECK, hint: "10000 年一遇" },
-      { label: "消落频率 P生", value: fmtPct(P_GEN), raw: P_GEN, hint: "兴利保证率" },
-      { label: "发电保证率 P", value: fmtPct(P_FLOOD_DOWN), raw: P_FLOOD_DOWN, hint: "下游防洪 20 年" },
-      { label: "经济利用小时", value: fmtInt(H_ECON), raw: H_ECON, unit: "h", hint: "替代电源" },
-      { label: "工程寿命 T", value: fmtInt(T_LIFE), raw: T_LIFE, unit: "年", hint: "经济计算期" },
-      { label: "施工年限 T建", value: fmtInt(T_BUILD), raw: T_BUILD, unit: "年", hint: "投资分年" },
-      { label: "运行年限 T运", value: fmtInt(T_RUN), raw: T_RUN, unit: "年", hint: "效益计算" },
-      { label: "火电重复年限 T替", value: fmtInt(T_FIRE), raw: T_FIRE, unit: "年", hint: "替代投资更新" },
-      { label: "多年平均流量 Q̄", value: fmtInt(qavg), raw: qavg, unit: "m³/s", hint: "31 年月均" },
-      { label: "多年平均年水量", value: fmt(ayi, 1), raw: ayi, unit: "亿m³/年" },
-      { label: "输沙量", value: fmt(SED_YEAR / 1e4, 1), raw: SED_YEAR, unit: "万m³/年" },
-      { label: "灌溉用水", value: fmtInt(IRRIG_Q), raw: IRRIG_Q, unit: "m³/s", hint: "5~9 月扣除" },
-      { label: "船闸用水", value: fmtInt(LOCK_Q), raw: LOCK_Q, unit: "m³/s", hint: "全年扣除" },
-      { label: "风速 W", value: fmtInt(WIND_V), raw: WIND_V, unit: "m/s", hint: "坝顶高程" },
-      { label: "吹程 D", value: fmtInt(WIND_D), raw: WIND_D, unit: "km", hint: "波浪计算" },
-      { label: "安全加高 (设计)", value: fmt(SAFETY_1, 1), raw: SAFETY_1, unit: "m" },
-      { label: "安全加高 (校核)", value: fmt(SAFETY_2, 1), raw: SAFETY_2, unit: "m" },
+      { key: "Q_SAFE",       label: "下游安全泄量 Q安", value: fmtInt(s.Q_SAFE),     raw: s.Q_SAFE,     unit: "m³/s", hint: "影响调洪演算", editable: true },
+      { key: "R0",           label: "经济折算率 r₀",    value: fmt(s.R0, 2),         raw: s.R0,         unit: "—",    hint: "影响年费用比较", editable: true, format: (v) => fmt(v, 2) },
+      { key: "P_DESIGN",     label: "设计频率 P设",      value: fmtPct(s.P_DESIGN),   raw: s.P_DESIGN,   hint: "1000 年一遇", editable: true, format: (v) => fmtPct(v) },
+      { key: "P_CHECK",      label: "校核频率 P校",      value: fmtPct(s.P_CHECK),    raw: s.P_CHECK,    hint: "10000 年一遇", editable: true, format: (v) => fmtPct(v) },
+      { key: "P_GEN",        label: "消落频率 P生",      value: fmtPct(s.P_GEN),      raw: s.P_GEN,      hint: "兴利保证率", editable: true, format: (v) => fmtPct(v) },
+      { key: "P_FLOOD_DOWN", label: "发电保证率 P",      value: fmtPct(s.P_FLOOD_DOWN), raw: s.P_FLOOD_DOWN, hint: "下游防洪 20 年", editable: true, format: (v) => fmtPct(v) },
+      { key: "H_ECON",       label: "经济利用小时",      value: fmtInt(s.H_ECON),     raw: s.H_ECON,     unit: "h",    hint: "替代电源", editable: true },
+      { key: "T_LIFE",       label: "工程寿命 T",        value: fmtInt(s.T_LIFE),     raw: s.T_LIFE,     unit: "年",   hint: "经济计算期", editable: true },
+      { key: "T_BUILD",      label: "施工年限 T建",      value: fmtInt(s.T_BUILD),    raw: s.T_BUILD,    unit: "年",   hint: "投资分年", editable: true },
+      { key: "T_RUN",        label: "运行年限 T运",      value: fmtInt(s.T_RUN),      raw: s.T_RUN,      unit: "年",   hint: "效益计算", editable: true },
+      { key: "T_FIRE",       label: "火电重复年限 T替",  value: fmtInt(s.T_FIRE),     raw: s.T_FIRE,     unit: "年",   hint: "替代投资更新", editable: true },
+      { label: "多年平均流量 Q̄", value: fmtInt(qavg),    raw: qavg,                  unit: "m³/s", hint: "由径流矩阵实时计算" },
+      { label: "多年平均年水量",  value: fmt(ayi, 1),     raw: ayi,                   unit: "亿m³/年", hint: "由径流矩阵实时计算" },
+      { key: "SED_YEAR",     label: "输沙量",            value: fmt(s.SED_YEAR / 1e4, 1), raw: s.SED_YEAR, unit: "万m³/年", editable: true },
+      { key: "IRRIG_Q",      label: "灌溉用水",          value: fmtInt(s.IRRIG_Q),    raw: s.IRRIG_Q,    unit: "m³/s", hint: "5~9 月扣除", editable: true },
+      { key: "LOCK_Q",       label: "船闸用水",          value: fmtInt(s.LOCK_Q),     raw: s.LOCK_Q,     unit: "m³/s", hint: "全年扣除", editable: true },
+      { key: "WIND_V",       label: "风速 W",            value: fmtInt(s.WIND_V),     raw: s.WIND_V,     unit: "m/s",  hint: "坝顶高程", editable: true },
+      { key: "WIND_D",       label: "吹程 D",            value: fmtInt(s.WIND_D),     raw: s.WIND_D,     unit: "km",   hint: "波浪计算", editable: true },
+      { key: "SAFETY_1",     label: "安全加高 (设计)",   value: fmt(s.SAFETY_1, 1),   raw: s.SAFETY_1,   unit: "m",    editable: true, format: (v) => fmt(v, 1) },
+      { key: "SAFETY_2",     label: "安全加高 (校核)",   value: fmt(s.SAFETY_2, 1),   raw: s.SAFETY_2,   unit: "m",    editable: true, format: (v) => fmt(v, 1) },
     ];
-  }, []);
+  }, [data]);
+
+  if (!isHydrated) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader
+          eyebrow="01 / Key Parameters"
+          title="关键设计参数"
+          description="任务书与规程中给定的全局常量与水文统计量, 全部参与方案计算。"
+          icon={Gauge}
+        />
+        <div
+          className="text-xs font-mono py-8 text-center"
+          style={{ color: "var(--muted)" }}
+        >
+          加载本地数据集…
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -216,48 +262,75 @@ function OverviewTab() {
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        {stats.map((s) => (
-          <div
-            key={s.label}
-            className="feature-card relative rounded-xl p-3.5 group"
-            style={{
-              backgroundColor: "var(--bg-canvas)",
-              border: "1px solid var(--border)",
-            }}
-          >
+        {stats.map((s) => {
+          const meta = s.key ? SCALAR_FIELDS_BY_KEY[s.key] : undefined;
+          return (
             <div
-              className="text-[10px] uppercase tracking-widest font-mono mb-2"
-              style={{ color: "var(--muted)" }}
+              key={s.label}
+              className="feature-card relative rounded-xl p-3.5 group"
+              style={{
+                backgroundColor: "var(--bg-canvas)",
+                border: s.editable
+                  ? "1px solid var(--accent-color)"
+                  : "1px solid var(--border)",
+              }}
             >
-              {s.label}
-            </div>
-            <div
-              className="font-mono tabular-nums text-2xl font-semibold tracking-tight"
-              style={{ color: "var(--text)" }}
-            >
-              {s.value}
-            </div>
-            <div className="flex items-center justify-between mt-1">
-              {s.unit && (
-                <span
-                  className="text-[11px] font-mono"
-                  style={{ color: "var(--muted)" }}
-                >
-                  {s.unit}
-                </span>
+              <div
+                className="text-[10px] uppercase tracking-widest font-mono mb-2 flex items-center justify-between"
+                style={{ color: "var(--muted)" }}
+              >
+                <span>{s.label}</span>
+                {s.editable && (
+                  <PencilLine
+                    className="h-3 w-3"
+                    style={{ color: "var(--accent-color)" }}
+                  />
+                )}
+              </div>
+              {s.editable && s.key ? (
+                <ScalarInput
+                  k={s.key}
+                  value={s.raw as number}
+                  display={s.value}
+                  unit={s.unit}
+                  hint={s.hint}
+                  step={s.step ?? meta?.step ?? 1}
+                  min={s.min ?? meta?.min}
+                  max={s.max ?? meta?.max}
+                  onCommit={(v) => setScalar(s.key as ScalarKey, v)}
+                />
+              ) : (
+                <>
+                  <div
+                    className="font-mono tabular-nums text-2xl font-semibold tracking-tight"
+                    style={{ color: "var(--text)" }}
+                  >
+                    {s.value}
+                  </div>
+                  <div className="flex items-center justify-between mt-1">
+                    {s.unit && (
+                      <span
+                        className="text-[11px] font-mono"
+                        style={{ color: "var(--muted)" }}
+                      >
+                        {s.unit}
+                      </span>
+                    )}
+                    {s.hint && (
+                      <span
+                        className="text-[10px] truncate ml-auto"
+                        style={{ color: "var(--muted)" }}
+                        title={s.hint}
+                      >
+                        {s.hint}
+                      </span>
+                    )}
+                  </div>
+                </>
               )}
-              {s.hint && (
-                <span
-                  className="text-[10px] truncate ml-auto"
-                  style={{ color: "var(--muted)" }}
-                  title={s.hint}
-                >
-                  {s.hint}
-                </span>
-              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* 数据规模摘要 */}
@@ -340,6 +413,7 @@ function RunoffTab() {
         description="1950/4 ~ 1981/3 共 31 个水文年的月平均流量, 顺序为 4 月起、次年 3 月止。"
         icon={Droplets}
       />
+      <DataTableHint name="径流" rows={RAW_MONTHLY.length} cols={12} schemaPath="raw_monthly" />
 
       {/* 摘要指标 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -676,6 +750,11 @@ function CurvesTab() {
         description="Z-V 来自任务书表 2, Z-Q 来自表 3, 用于水位库容插值与下游水位反查。"
         icon={Ruler}
       />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <DataTableHint name="Z-V 曲线" rows={Z_V_TABLE.length} schemaPath="zv" />
+        <DataTableHint name="Z-Q 曲线" rows={Z_Q_TABLE.length} schemaPath="zq" />
+      </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Z-V */}
@@ -1326,6 +1405,11 @@ function FloodTab() {
         description="P=5% (下游防洪)、P=0.1% (设计)、P=0.01% (校核) 三场典型洪水, 用于调洪演算。"
         icon={Waves}
       />
+      <DataTableHint
+        name="洪水过程线"
+        rows={Math.max(...FLOOD_KEYS.map((k) => FLOOD_DATA[k].length))}
+        schemaPath="floods"
+      />
 
       {/* 洪峰卡片 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1847,6 +1931,316 @@ function RatioRow({ label, data }: { label: string; data: number[] }) {
 }
 
 // ============================================================
+// 标量编辑 input (回车 / 失焦 commit, Esc 取消)
+// ============================================================
+
+function ScalarInput({
+  k,
+  value,
+  display,
+  unit,
+  hint,
+  step,
+  min,
+  max,
+  onCommit,
+}: {
+  k: ScalarKey;
+  value: number;
+  display: string;
+  unit?: string;
+  hint?: string;
+  step: number;
+  min?: number;
+  max?: number;
+  onCommit: (v: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const showValue = draft ?? display;
+
+  function commit() {
+    if (draft == null) return;
+    const n = Number(draft);
+    if (!Number.isFinite(n)) {
+      setDraft(null);
+      return;
+    }
+    let v = n;
+    if (typeof min === "number" && v < min) v = min;
+    if (typeof max === "number" && v > max) v = max;
+    if (v !== value) onCommit(v);
+    setDraft(null);
+  }
+
+  return (
+    <div>
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="decimal"
+        step={step}
+        min={min}
+        max={max}
+        value={showValue}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+            inputRef.current?.blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setDraft(null);
+            inputRef.current?.blur();
+          }
+        }}
+        title={hint ?? k}
+        className="font-mono tabular-nums text-2xl font-semibold tracking-tight w-full bg-transparent border-b border-dashed focus:outline-none focus:border-solid"
+        style={{
+          color: "var(--accent-color)",
+          borderColor: draft != null ? "var(--accent-color)" : "var(--border)",
+        }}
+      />
+      <div className="flex items-center justify-between mt-1">
+        {unit && (
+          <span
+            className="text-[11px] font-mono"
+            style={{ color: "var(--muted)" }}
+          >
+            {unit}
+          </span>
+        )}
+        {hint && (
+          <span
+            className="text-[10px] truncate ml-auto"
+            style={{ color: "var(--muted)" }}
+            title={hint}
+          >
+            {hint}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// 二维数据编辑入口提示
+// ============================================================
+
+function DataTableHint({
+  name,
+  rows,
+  cols,
+  schemaPath,
+}: {
+  name: string;
+  rows: number;
+  cols?: number;
+  schemaPath: string;
+}) {
+  const { data, isHydrated } = useDataset();
+  if (!isHydrated) return null;
+  const liveRows =
+    name === "径流" ? data.raw_monthly.length :
+    name === "Z-V 曲线" ? data.zv.length :
+    name === "Z-Q 曲线" ? data.zq.length :
+    name === "洪水过程线" ? Object.values(data.floods).reduce((a, b) => Math.max(a, b.length), 0) :
+    rows;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg px-4 py-2.5 text-[11px] font-mono"
+      style={{
+        backgroundColor: "var(--surface)",
+        border: "1px dashed var(--border)",
+        color: "var(--muted)",
+      }}
+    >
+      <span className="inline-flex items-center gap-1.5" style={{ color: "var(--accent-color)" }}>
+        <FileJson className="h-3.5 w-3.5" /> {name}
+      </span>
+      <span>
+        当前 <b style={{ color: "var(--text)" }}>{liveRows}</b>
+        {cols ? <> × <b style={{ color: "var(--text)" }}>{cols}</b></> : null} 条记录
+      </span>
+      <span className="ml-auto">
+        通过页面顶部的
+        <span style={{ color: "var(--accent-color)" }}>「导入 JSON」</span>
+        修改本表 (JSON key: <code style={{ color: "var(--text)" }}>{schemaPath}</code>)
+      </span>
+    </div>
+  );
+}
+
+// ============================================================
+// 数据集导入 / 导出 / 重置 按钮组
+// ============================================================
+
+function ImportExportBar({ compact = false }: { compact?: boolean }) {
+  const { isHydrated, isModified, importJson, exportJson, reset } = useDataset();
+  const [feedback, setFeedback] = useState<{
+    kind: "ok" | "err";
+    msg: string;
+  } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  if (!isHydrated) return null;
+
+  function handleExport() {
+    const text = exportJson();
+    const ts = new Date()
+      .toISOString()
+      .replace(/[-:T]/g, "")
+      .slice(0, 14);
+    downloadJson(`wqx-dataset-${ts}.json`, text);
+    setFeedback({ kind: "ok", msg: "已下载 JSON 文件" });
+  }
+
+  function handleImportClick() {
+    fileRef.current?.click();
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 允许重复选同一文件
+    if (!file) return;
+    try {
+      const text = await file.text();
+      importJson(text);
+      setFeedback({
+        kind: "ok",
+        msg: `已导入 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+      });
+    } catch (err: any) {
+      const msg =
+        err instanceof DatasetImportError
+          ? err.message
+          : err?.message ?? String(err);
+      setFeedback({ kind: "err", msg: `导入失败: ${msg}` });
+    }
+  }
+
+  function handleReset() {
+    if (typeof window !== "undefined" && !window.confirm("确定恢复任务书默认数据吗? 当前修改将丢失。")) {
+      return;
+    }
+    reset();
+    setFeedback({ kind: "ok", msg: "已恢复默认值" });
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1.5 shrink-0">
+      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+        <button
+          onClick={handleImportClick}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors"
+          style={{
+            backgroundColor: "var(--bg-canvas)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+          }}
+          title="从 JSON 文件加载数据集"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          导入 JSON
+        </button>
+        <button
+          onClick={handleExport}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors"
+          style={{
+            backgroundColor: "var(--bg-canvas)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+          }}
+          title="下载当前数据集为 JSON 文件"
+        >
+          <Download className="h-3.5 w-3.5" />
+          导出 JSON
+        </button>
+        <button
+          onClick={handleReset}
+          disabled={!isModified}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors"
+          style={{
+            backgroundColor: "var(--bg-canvas)",
+            color: isModified ? "var(--text)" : "var(--muted)",
+            border: "1px solid var(--border)",
+            opacity: isModified ? 1 : 0.5,
+            cursor: isModified ? "pointer" : "not-allowed",
+          }}
+          title="恢复任务书默认数据"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          重置默认
+        </button>
+        {!compact && (
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium uppercase tracking-wider"
+            style={{
+              backgroundColor: isModified
+                ? "rgba(245, 158, 11, 0.12)"
+                : "var(--accent-soft)",
+              color: isModified ? "var(--warning)" : "var(--accent-color)",
+              border: isModified
+                ? "1px solid var(--warning)"
+                : "1px solid var(--accent-color)",
+            }}
+          >
+            {isModified ? (
+              <>
+                <PencilLine className="h-3 w-3" />
+                已修改 · 自动保存
+              </>
+            ) : (
+              <>
+                <Check className="h-3 w-3" />
+                默认值 · 自动保存
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {feedback && (
+        <div
+          className="flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded"
+          style={{
+            color: feedback.kind === "ok" ? "var(--success)" : "var(--error)",
+            backgroundColor:
+              feedback.kind === "ok"
+                ? "rgba(34, 197, 94, 0.1)"
+                : "rgba(239, 68, 68, 0.1)",
+          }}
+        >
+          {feedback.kind === "ok" ? (
+            <Check className="h-3 w-3" />
+          ) : (
+            <AlertTriangle className="h-3 w-3" />
+          )}
+          {feedback.msg}
+          <button
+            onClick={() => setFeedback(null)}
+            className="ml-1 opacity-60 hover:opacity-100"
+            aria-label="关闭"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // 主组件
 // ============================================================
 
@@ -1876,16 +2270,7 @@ export function DataPage() {
             目录下, 此处按类别展示以便查阅。
           </p>
         </div>
-        <div
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium uppercase tracking-wider shrink-0"
-          style={{
-            backgroundColor: "var(--accent-soft)",
-            color: "var(--accent-color)",
-          }}
-        >
-          <Database className="h-3 w-3" />
-          只读 · 来源: 任务书
-        </div>
+        <ImportExportBar />
       </div>
 
       <Tabs defaultValue="params" className="w-full">

@@ -17,6 +17,7 @@ import {
   FIRE_OP_FACTOR,
 } from "@/lib/engine";
 import { useParams } from "./useParams";
+import { useDataset } from "./useDataset";
 
 // ── Flood keys ───────────────────────────────────────────
 const FLOOD_DOWN_KEY = "P=5% (20年)";
@@ -196,6 +197,7 @@ function route_flood_with_offset(
 
 export function useAllResults() {
   const { params } = useParams();
+  const { version: datasetVersion } = useDataset();
   const { Q_SAFE, R0, Z_zheng_offset } = params;
 
   return useMemo(() => {
@@ -252,5 +254,5 @@ export function useAllResults() {
     const econ = localEconomicCompare(table, R0);
 
     return { waterResults, floodResults, table, econ, schemes };
-  }, [Q_SAFE, R0, Z_zheng_offset]);
+  }, [Q_SAFE, R0, Z_zheng_offset, datasetVersion]);
 }

@@ -1,17 +1,5 @@
-/**
- * Agent LLM 适配器 — OpenRouter (Qwen)
- *
- * 环境变量:
- *   OPENROUTER_API_KEY   必填, OpenRouter 的 Bearer token
- *   OPENROUTER_MODEL     可选, 默认 "qwen/qwen-2.5-7b-instruct" (便宜)
- *   OPENROUTER_BASE_URL  可选, 默认 https://openrouter.ai/api/v1
- *   AGENT_LLM_TIMEOUT_MS 可选, 默认 45000
- *
- * 没配 key → 不抛错, 返回 null, 由调用方走本地兜底.
- */
-
-import type { AgentContext, AgentRequest, SourceRef } from "./types";
-import { buildUserPrompt, SYSTEM_PROMPT, buildLocalFallback } from "./prompts";
+import type { AgentContext, AgentRequest, EvidenceRef, SourceRef } from "./types";
+import { buildLocalFallback, buildUserPrompt, SYSTEM_PROMPT } from "./prompts";
 import { classify } from "./classify";
 
 const DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
@@ -37,34 +25,37 @@ export function readLLMConfig(): LLMConfig {
 export interface LLMCallInput {
   ctx: AgentContext;
   req: AgentRequest;
+  evidence?: EvidenceRef[];
 }
 
 export interface LLMCallResult {
   answer: string;
   sources: SourceRef[];
+  evidence?: EvidenceRef[];
   model: string;
   tokensIn?: number;
   tokensOut?: number;
-  fallback: boolean; // true = 走本地兜底 (无 key / 出错)
+  fallback: boolean;
 }
 
-/** 主入口: 给定 context + question, 拿答案 */
-export async function callLLM({ ctx, req }: LLMCallInput): Promise<LLMCallResult> {
+export async function callLLM({ ctx, req, evidence = [] }: LLMCallInput): Promise<LLMCallResult> {
   const cfg = readLLMConfig();
   const cls = classify(req.question);
-  const { prompt: userPrompt, sources } = buildUserPrompt(ctx, req, cls);
+  const base = buildUserPrompt(ctx, req, cls);
+  const userPrompt = appendEvidenceSection(base.prompt, evidence);
+  const mergedSources = mergeSources(base.sources, evidence);
 
   if (!cfg.apiKey) {
-    const fb = buildLocalFallback(ctx, req);
+    const fallback = buildLocalFallback(ctx, req);
     return {
-      answer: fb.answer,
-      sources: fb.sources,
+      answer: appendFallbackEvidenceNote(fallback.answer, evidence),
+      sources: mergeSources(fallback.sources, evidence),
+      evidence,
       model: "local-fallback",
       fallback: true,
     };
   }
 
-  // 调 OpenRouter (OpenAI 兼容)
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
 
@@ -72,9 +63,8 @@ export async function callLLM({ ctx, req }: LLMCallInput): Promise<LLMCallResult
     const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${cfg.apiKey}`,
+        Authorization: `Bearer ${cfg.apiKey}`,
         "Content-Type": "application/json",
-        // OpenRouter 推荐的几个, 不影响功能, 但会出现在 dashboard
         "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:3000",
         "X-Title": "wqx-workbench agent",
       },
@@ -86,7 +76,6 @@ export async function callLLM({ ctx, req }: LLMCallInput): Promise<LLMCallResult
         ],
         max_tokens: 1800,
         temperature: 0.2,
-        // Qwen 支持的 stop / response_format 按需开启, 这里先不锁
       }),
       signal: controller.signal,
     });
@@ -98,27 +87,72 @@ export async function callLLM({ ctx, req }: LLMCallInput): Promise<LLMCallResult
 
     const data = await res.json();
     const answer: string = data?.choices?.[0]?.message?.content?.trim() || "";
-    if (!answer) throw new Error("OpenRouter returned empty content");
+    if (!answer) {
+      throw new Error("OpenRouter returned empty content");
+    }
 
     return {
       answer,
-      sources,
+      sources: mergedSources,
+      evidence,
       model: cfg.model,
       tokensIn: data?.usage?.prompt_tokens,
       tokensOut: data?.usage?.completion_tokens,
       fallback: false,
     };
-  } catch (err) {
-    // 出错 → 走本地兜底, 不让前端崩
-    const fb = buildLocalFallback(ctx, req);
-    const errMsg = err instanceof Error ? err.message : String(err);
+  } catch (error) {
+    const fallback = buildLocalFallback(ctx, req);
+    const message = error instanceof Error ? error.message : String(error);
     return {
-      answer: `${fb.answer}\n\n---\n> ⚠ LLM 调用失败, 已降级到本地兜底. 错误: \`${errMsg}\``,
-      sources: fb.sources,
+      answer:
+        `${appendFallbackEvidenceNote(fallback.answer, evidence)}\n\n---\n` +
+        `> LLM 服务暂时不可用，已切换为本地回退答案。错误信息：\`${message}\``,
+      sources: mergeSources(fallback.sources, evidence),
+      evidence,
       model: `${cfg.model} (fallback)`,
       fallback: true,
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function appendEvidenceSection(prompt: string, evidence: EvidenceRef[]): string {
+  if (evidence.length === 0) return prompt;
+
+  const lines = evidence.map((item, index) =>
+    [
+      `### 证据 ${index + 1}`,
+      `- 标题: ${item.title}`,
+      `- 来源: ${item.file}${item.section ? ` / ${item.section}` : ""}`,
+      `- 类型: ${item.sourceType}`,
+      `- 相关度: ${item.relevance}`,
+      `- 摘录: ${item.snippet}`,
+    ].join("\n"),
+  );
+
+  return `${prompt}\n# 资料调查证据\n${lines.join("\n\n")}\n`;
+}
+
+function mergeSources(sources: SourceRef[], evidence: EvidenceRef[]): SourceRef[] {
+  const merged = new Map<string, SourceRef>();
+
+  for (const source of sources) {
+    merged.set(`${source.file}::${source.section}`, source);
+  }
+
+  for (const item of evidence) {
+    const source = {
+      file: item.file,
+      section: item.section ?? item.title,
+    };
+    merged.set(`${source.file}::${source.section}`, source);
+  }
+
+  return [...merged.values()];
+}
+
+function appendFallbackEvidenceNote(answer: string, evidence: EvidenceRef[]): string {
+  if (evidence.length === 0) return answer;
+  return `${answer}\n\n已补充本地资料调查结果，可结合下方证据继续核对。`;
 }

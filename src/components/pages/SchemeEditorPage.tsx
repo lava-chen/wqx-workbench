@@ -451,9 +451,7 @@ export function SchemeEditorPage() {
   const { params, isModified, defaults } = useParams();
 
   // 全部展开 (新版) 还是只展开第一项 (旧版)
-  const [expandedSet, setExpandedSet] = useState<Set<string>>(
-    () => new Set(schemes.map((s) => s.id))
-  );
+  const [expandedSet, setExpandedSet] = useState<Set<string>>(() => new Set());
 
   function toggleExpand(id: string) {
     setExpandedSet((prev) => {

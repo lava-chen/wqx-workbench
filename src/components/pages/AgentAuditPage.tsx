@@ -1,30 +1,53 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, Loader2, AlertCircle, FileText, Trash2, Copy, Check, Info } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AlertCircle,
+  Bot,
+  Check,
+  Copy,
+  FileSearch,
+  FileText,
+  Info,
+  Loader2,
+  Send,
+  Trash2,
+  User,
+} from "lucide-react";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { AgentDesignDrawer } from "@/components/chat/AgentDesignDrawer";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-// ── Types ───────────────────────────────────────────────
+interface MessageSource {
+  file: string;
+  section: string;
+}
+
+interface MessageEvidence {
+  title: string;
+  snippet: string;
+  sourceType: string;
+  file: string;
+  section?: string;
+  relevance: number;
+}
 
 interface Message {
   id: string;
   role: "user" | "agent";
   content: string;
-  sources?: { file: string; section: string }[];
+  sources?: MessageSource[];
+  evidence?: MessageEvidence[];
   timestamp: number;
 }
 
-// ── Constants ───────────────────────────────────────────
-
 const PRESET_QUESTIONS = [
-  "任务书要求的23项水利指标是否全部完成？",
+  "任务书要求的 23 项水利指标是否全部完成？",
   "方案 II 为什么最优？",
   "防洪限制水位为什么等于正常蓄水位？",
-  "某个指标是从哪个数据、哪个公式来的？",
-  "当前报告还有哪些可能被老师质疑的地方？",
+  "某个指标是从哪个数据、哪个公式算出来的？",
+  "当前报告还有哪些地方可能被老师质疑？",
 ];
 
 const API_URL =
@@ -33,26 +56,23 @@ const API_URL =
     : "/api/agent";
 
 const STORAGE_KEY = "wqx:agent:messages:v1";
-const STORAGE_MAX = 200; // 最多保留 200 条
+const STORAGE_MAX = 200;
 
-// ── Helpers ─────────────────────────────────────────────
+let messageCounter = 0;
 
-let msgCounter = 0;
 function nextId(): string {
-  msgCounter += 1;
-  return `msg-${Date.now()}-${msgCounter}`;
+  messageCounter += 1;
+  return `msg-${Date.now()}-${messageCounter}`;
 }
 
-/** 从 localStorage 安全读取 (SSR-safe, JSON 失败返 null) */
 function loadMessages(): Message[] {
   if (typeof window === "undefined") return [];
+
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    // 裁剪到 max, 避免历史太久撑爆存储
-    return parsed.slice(-STORAGE_MAX) as Message[];
+    return Array.isArray(parsed) ? (parsed.slice(-STORAGE_MAX) as Message[]) : [];
   } catch {
     return [];
   }
@@ -60,147 +80,149 @@ function loadMessages(): Message[] {
 
 function saveMessages(messages: Message[]): void {
   if (typeof window === "undefined") return;
+
   try {
-    const trimmed = messages.slice(-STORAGE_MAX);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-STORAGE_MAX)));
   } catch {
-    /* 配额满 / 隐私模式, 静默 */
+    // Ignore quota or private mode errors.
   }
 }
 
-/** 把对话序列化成 Markdown (用于复制导出) */
 function formatMessagesAsMarkdown(messages: Message[]): string {
   const lines: string[] = [];
   const now = new Date().toLocaleString("zh-CN", { hour12: false });
-  const userCount = messages.filter((m) => m.role === "user").length;
-  const agentCount = messages.length - userCount;
+  const userCount = messages.filter((item) => item.role === "user").length;
 
   lines.push("# Agent 自检对话");
   lines.push("");
-  lines.push(`> 导出时间: ${now}`);
-  lines.push(`> 共 ${messages.length} 条消息 (${userCount} 提问 / ${agentCount} 回答)`);
+  lines.push(`> 导出时间：${now}`);
+  lines.push(`> 共 ${messages.length} 条消息（${userCount} 条提问 / ${messages.length - userCount} 条回答）`);
   lines.push("");
 
-  messages.forEach((m) => {
-    const ts = new Date(m.timestamp).toLocaleString("zh-CN", { hour12: false });
-    const head = m.role === "user" ? `## 👤 用户` : `## 🤖 Agent`;
-    lines.push(`${head}  ·  ${ts}`);
+  for (const message of messages) {
+    const ts = new Date(message.timestamp).toLocaleString("zh-CN", { hour12: false });
+    lines.push(`## ${message.role === "user" ? "用户" : "Agent"} / ${ts}`);
     lines.push("");
-    // 用户内容是纯文本, 缩进; agent 内容是 markdown 源码, 直接放
-    if (m.role === "user") {
-      lines.push("> " + m.content.split("\n").join("\n> "));
+
+    if (message.role === "user") {
+      lines.push(`> ${message.content.split("\n").join("\n> ")}`);
     } else {
-      lines.push(m.content);
-      if (m.sources && m.sources.length > 0) {
+      lines.push(message.content);
+
+      if (message.sources?.length) {
         lines.push("");
         lines.push("**参考来源**");
-        m.sources.forEach((s) => {
-          lines.push(`- ${s.file}${s.section ? ` · ${s.section}` : ""}`);
-        });
+        for (const source of message.sources) {
+          lines.push(`- ${source.file}${source.section ? ` / ${source.section}` : ""}`);
+        }
+      }
+
+      if (message.evidence?.length) {
+        lines.push("");
+        lines.push("**调查证据**");
+        for (const evidence of message.evidence) {
+          lines.push(
+            `- ${evidence.title} / ${evidence.file}${evidence.section ? ` / ${evidence.section}` : ""} / 相关度 ${evidence.relevance}`,
+          );
+          lines.push(`  摘录：${evidence.snippet}`);
+        }
       }
     }
+
     lines.push("");
     lines.push("---");
     lines.push("");
-  });
+  }
 
   return lines.join("\n");
 }
 
-// ── Component ───────────────────────────────────────────
-
 export function AgentAuditPage() {
-  // 用 lazy initializer: 首次渲染时读 localStorage, SSR 期间返 []
   const [messages, setMessages] = useState<Message[]>(loadMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [designOpen, setDesignOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  // 消息变化时持久化 (跳过初始挂载, 避免覆盖)
   const isFirstRender = useRef(true);
+
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
+
     saveMessages(messages);
   }, [messages]);
 
-  // 滚到底
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, loading]);
 
-  // 清空对话
   const handleClear = useCallback(() => {
     if (messages.length === 0) return;
-    if (!window.confirm(`清空当前对话? (${messages.length} 条消息)`)) return;
+    if (!window.confirm(`清空当前对话？共 ${messages.length} 条消息。`)) return;
     setMessages([]);
     setApiError(null);
   }, [messages.length]);
 
-  // 复制为 Markdown (含"已复制"反馈)
-  const [copied, setCopied] = useState(false);
   const handleExport = useCallback(async () => {
     if (messages.length === 0) return;
-    const md = formatMessagesAsMarkdown(messages);
+
+    const markdown = formatMessagesAsMarkdown(messages);
     try {
-      await navigator.clipboard.writeText(md);
+      await navigator.clipboard.writeText(markdown);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // 剪贴板被拒 → 降级: 用 textarea select + execCommand
-      const ta = document.createElement("textarea");
-      ta.value = md;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
+      const textarea = document.createElement("textarea");
+      textarea.value = markdown;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
       try {
         document.execCommand("copy");
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
-      } catch {
-        /* 真的不行就静默, 不打扰用户 */
       } finally {
-        document.body.removeChild(ta);
+        document.body.removeChild(textarea);
       }
     }
   }, [messages]);
 
   const sendMessage = useCallback(
     async (question: string) => {
-      if (!question.trim() || loading) return;
+      const trimmed = question.trim();
+      if (!trimmed || loading) return;
 
-      const userMsg: Message = {
+      const userMessage: Message = {
         id: nextId(),
         role: "user",
-        content: question.trim(),
+        content: trimmed,
         timestamp: Date.now(),
       };
 
-      setMessages((prev) => [...prev, userMsg]);
+      const snapshot = [...messages, userMessage];
+      setMessages(snapshot);
       setInput("");
       setLoading(true);
       setApiError(null);
 
       try {
-        // 取当前快照作为历史 (含刚加的 user msg 也行, 后端会自己处理)
-        const snapshot = [...messages, userMsg];
-        const history = snapshot.map((m) => ({
-          role: m.role,
-          content: m.content,
+        const history = snapshot.map((item) => ({
+          role: item.role,
+          content: item.content,
         }));
 
         const res = await fetch(API_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            question: question.trim(),
+            question: trimmed,
             history,
           }),
         });
@@ -210,107 +232,65 @@ export function AgentAuditPage() {
         }
 
         const data = await res.json();
-
-        const agentMsg: Message = {
+        const agentMessage: Message = {
           id: nextId(),
           role: "agent",
-          content: data.answer ?? "（Agent 未返回有效回答）",
+          content: data.answer ?? "Agent 未返回有效回答。",
           sources: data.sources,
+          evidence: data.evidence,
           timestamp: Date.now(),
         };
 
-        setMessages((prev) => [...prev, agentMsg]);
+        setMessages((prev) => [...prev, agentMessage]);
       } catch {
-        setApiError("Agent API 未连接，请确保后端服务已启动");
+        setApiError("Agent API 暂时不可用，请确认本地服务已经启动。");
       } finally {
         setLoading(false);
+        inputRef.current?.focus();
       }
     },
-    [messages, loading],
+    [loading, messages],
   );
 
   const handleSend = useCallback(() => {
-    sendMessage(input);
+    void sendMessage(input);
   }, [input, sendMessage]);
 
-  const handlePresetClick = useCallback(
-    (question: string) => {
-      sendMessage(question);
-    },
-    [sendMessage],
-  );
-
   return (
-    <div
-      className="flex flex-col flex-1 min-h-0 rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden"
-    >
-      {/* ── Header (固定, 不滚动) ── */}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
       <div className="shrink-0 border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <div className="text-base font-medium text-[var(--text)] font-display">Agent 自检</div>
-            <div className="text-xs text-[var(--muted)] truncate">
-              基于课程设计知识库 · 模型 <span className="font-mono text-[10px]">qwen-2.5-7b</span> · OpenRouter
-              {messages.length > 0 && (
-                <span className="ml-1.5">· 已存 {messages.length} 条</span>
-              )}
+          <div className="min-w-0 flex-1">
+            <div className="font-display text-base font-medium text-[var(--text)]">Agent 自检</div>
+            <div className="truncate text-xs text-[var(--muted)]">
+              基于课设知识库、本地代码与文档检索 · 模型
+              <span className="ml-1 font-mono text-[10px]">qwen-2.5-7b</span>
+              {messages.length > 0 && <span className="ml-1.5">· 已存 {messages.length} 条</span>}
             </div>
           </div>
 
-          {/* 操作按钮组: 复制 + 清空 */}
-          <div className="shrink-0 flex items-center gap-1.5">
-            {/* 复制为 Markdown */}
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               onClick={handleExport}
               disabled={messages.length === 0}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-40"
               style={{
                 backgroundColor: copied ? "var(--success-soft)" : "var(--chip)",
                 color: copied ? "var(--success)" : "var(--muted)",
               }}
-              onMouseEnter={(e) => {
-                if (messages.length === 0) return;
-                (e.currentTarget as HTMLElement).style.color = "var(--accent-color)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.color = copied
-                  ? "var(--success)"
-                  : "var(--muted)";
-              }}
-              title="复制整个对话为 Markdown 到剪贴板"
+              title="复制整个对话为 Markdown"
             >
-              {copied ? (
-                <>
-                  <Check className="h-3 w-3" />
-                  已复制
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3 w-3" />
-                  复制
-                </>
-              )}
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? "已复制" : "复制"}
             </button>
 
-            {/* 清空 */}
             <button
               type="button"
               onClick={handleClear}
               disabled={messages.length === 0}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{
-                backgroundColor: "var(--chip)",
-                color: "var(--muted)",
-              }}
-              onMouseEnter={(e) => {
-                if (messages.length === 0) return;
-                (e.currentTarget as HTMLElement).style.color = "var(--error)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.color = "var(--muted)";
-              }}
-              title="清空对话历史 (本地存储)"
+              className="inline-flex items-center gap-1 rounded-md bg-[var(--chip)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              title="清空本地对话历史"
             >
               <Trash2 className="h-3 w-3" />
               清空
@@ -318,44 +298,30 @@ export function AgentAuditPage() {
           </div>
         </div>
 
-        {/* Preset question chips */}
-        <div className="flex flex-wrap gap-1.5 mt-3">
-          {PRESET_QUESTIONS.map((q) => (
+        <div className="mt-3 flex max-h-[72px] flex-wrap gap-1.5 overflow-y-auto pr-1">
+          {PRESET_QUESTIONS.map((question) => (
             <Badge
-              key={q}
+              key={question}
               variant="secondary"
-              className="cursor-pointer transition-colors text-xs py-1"
+              className="cursor-pointer py-1 text-xs transition-colors"
               style={{ backgroundColor: "var(--chip)", color: "var(--muted)" }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.backgroundColor = "var(--accent-soft)";
-                (e.currentTarget as HTMLElement).style.color = "var(--accent-color)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.backgroundColor = "var(--chip)";
-                (e.currentTarget as HTMLElement).style.color = "var(--muted)";
-              }}
-              onClick={() => handlePresetClick(q)}
+              onClick={() => void sendMessage(question)}
             >
-              {q}
+              {question}
             </Badge>
           ))}
         </div>
       </div>
 
-      {/* ── Chat area (仅这里滚动) ── */}
-      <div
-        className="flex-1 overflow-y-auto min-h-0"
-        style={{ backgroundColor: "var(--bg-canvas)" }}
-      >
-        <div className="px-4 py-4 space-y-3">
-          {/* API error banner */}
+      <div className="min-h-0 flex-1 overflow-y-auto" style={{ backgroundColor: "var(--bg-canvas)" }}>
+        <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col space-y-3 px-4 py-4">
           {apiError && (
             <div
-              className="flex items-start gap-2 rounded-lg p-3 text-sm"
+              className="flex items-start gap-2 rounded-lg border p-3 text-sm"
               style={{
                 backgroundColor: "var(--error-soft)",
                 color: "var(--error)",
-                border: "1px solid var(--error)",
+                borderColor: "var(--error)",
               }}
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -363,54 +329,42 @@ export function AgentAuditPage() {
             </div>
           )}
 
-          {/* Empty state */}
           {messages.length === 0 && !apiError && (
             <div className="flex flex-col items-center justify-center py-16 text-center">
-              <h3 className="text-sm font-medium text-[var(--text)] mb-1">有什么问题可以问我</h3>
-              <p className="text-xs text-[var(--muted)] max-w-sm">
-                点击上方预设问题快速提问，或在下方输入框中输入您的问题
+              <h3 className="mb-1 text-sm font-medium text-[var(--text)]">先从一个核对问题开始</h3>
+              <p className="max-w-sm text-xs text-[var(--muted)]">
+                上面可以直接点预设问题，也可以问某个指标来源、某张图为什么这样画、或者报告还有哪些风险点。
               </p>
             </div>
           )}
 
-          {/* Messages */}
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
           ))}
 
-          {/* Loading indicator */}
           {loading && (
             <div className="flex items-start gap-3">
               <div
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
                 style={{ backgroundColor: "var(--accent-soft)" }}
               >
-                <Loader2
-                  className="h-3.5 w-3.5 animate-spin"
-                  style={{ color: "var(--accent-color)" }}
-                />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: "var(--accent-color)" }} />
               </div>
-              <div
-                className="rounded-2xl rounded-tl-md px-4 py-2.5"
-                style={{ backgroundColor: "var(--surface)" }}
-              >
-                <div
-                  className="flex items-center gap-1.5 text-xs"
-                  style={{ color: "var(--muted)" }}
-                >
+              <div className="rounded-2xl rounded-tl-md px-4 py-2.5" style={{ backgroundColor: "var(--surface)" }}>
+                <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
                   <span
-                    className="inline-block h-1.5 w-1.5 rounded-full animate-bounce [animation-delay:0ms]"
+                    className="inline-block h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:0ms]"
                     style={{ backgroundColor: "var(--accent-color)" }}
                   />
                   <span
-                    className="inline-block h-1.5 w-1.5 rounded-full animate-bounce [animation-delay:150ms]"
+                    className="inline-block h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:150ms]"
                     style={{ backgroundColor: "var(--accent-color)" }}
                   />
                   <span
-                    className="inline-block h-1.5 w-1.5 rounded-full animate-bounce [animation-delay:300ms]"
+                    className="inline-block h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:300ms]"
                     style={{ backgroundColor: "var(--accent-color)" }}
                   />
-                  <span className="ml-1.5">正在思考…</span>
+                  <span>正在查资料并组织回答…</span>
                 </div>
               </div>
             </div>
@@ -420,130 +374,91 @@ export function AgentAuditPage() {
         </div>
       </div>
 
-      {/* ── Input area (固定, duya 风格 pill) ── */}
-      <div
-        className="shrink-0 border-t border-[var(--border)] p-3"
-        style={{ backgroundColor: "var(--bg-canvas)" }}
-      >
+      <div className="shrink-0 border-t border-[var(--border)] p-3" style={{ backgroundColor: "var(--bg-canvas)" }}>
         <form
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(event) => {
+            event.preventDefault();
             handleSend();
           }}
-          className="rounded-2xl p-2 transition-shadow"
+          className="mx-auto w-full max-w-6xl rounded-2xl p-2"
           style={{
             backgroundColor: "var(--surface)",
-            boxShadow:
-              "inset 0 0 0 1px var(--border-color, var(--border)), 0 2px 8px rgba(0,0,0,0.04)",
+            boxShadow: "inset 0 0 0 1px var(--border-color, var(--border)), 0 2px 8px rgba(0,0,0,0.04)",
           }}
         >
-          {/* Textarea */}
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              // auto-resize
-              const t = e.target;
-              t.style.height = "auto";
-              t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+            onChange={(event) => {
+              setInput(event.target.value);
+              const target = event.target;
+              target.style.height = "auto";
+              target.style.height = `${Math.min(target.scrollHeight, 160)}px`;
             }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
                 handleSend();
               }
             }}
-            placeholder="问点什么… (Enter 发送, Shift+Enter 换行)"
+            placeholder="问点什么……（Enter 发送，Shift+Enter 换行）"
             disabled={loading}
             rows={1}
-            className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none min-h-[40px] max-h-[160px] py-2 px-2"
+            className="min-h-[40px] max-h-[160px] w-full resize-none bg-transparent px-2 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
 
-          {/* Bottom toolbar */}
-          <div className="mt-1 px-1 flex items-center justify-between">
-            {/* Left: context info */}
-            <div className="flex items-center gap-1.5 min-w-0 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex items-center justify-between px-1">
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
               <span
-                className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded-md font-mono"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 font-mono"
                 style={{ backgroundColor: "var(--chip)" }}
               >
-                Qwen 2.5 · 7B
+                Qwen 2.5 / 7B
               </span>
               <span
                 role="button"
                 tabIndex={0}
                 onClick={() => setDesignOpen(true)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
                     setDesignOpen(true);
                   }
                 }}
-                className="hidden sm:inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] cursor-pointer transition-colors hover:text-[var(--accent-color)]"
-                title="点击查看 Agent 设计说明"
+                className="hidden cursor-pointer items-center gap-1 whitespace-nowrap text-[11px] transition-colors hover:text-[var(--accent-color)] sm:inline-flex"
+                title="查看 Agent 设计说明"
               >
-                <span>上下文 23 指标 + 4 方案</span>
+                <span>上下文 23 指标 + 4 方案 + 本地资料检索</span>
                 <Info className="h-3 w-3 opacity-60" />
               </span>
             </div>
 
-            {/* Right: Send / Stop */}
-            {loading ? (
-              <button
-                type="button"
-                disabled
-                className="w-8 h-8 rounded-full flex items-center justify-center transition-colors opacity-70 cursor-not-allowed"
-                style={{ backgroundColor: "var(--error-soft)", color: "var(--error)" }}
-                title="正在回答…"
-              >
-                <Loader2 className="h-4 w-4 animate-spin" />
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                style={{ backgroundColor: "var(--send-btn)" }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = "var(--send-btn-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = "var(--send-btn)";
-                }}
-                title="发送"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            )}
+            <button
+              type="submit"
+              disabled={!input.trim() || loading}
+              className="flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ backgroundColor: "var(--send-btn)" }}
+              title="发送"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </button>
           </div>
         </form>
       </div>
 
-      {/* ── 设计说明抽屉 ── */}
       <AgentDesignDrawer open={designOpen} onClose={() => setDesignOpen(false)} />
     </div>
   );
 }
 
-// ── Message Bubble ──────────────────────────────────────
-
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
   return (
-    <div
-      className={cn(
-        "flex items-start gap-3",
-        isUser ? "flex-row-reverse" : "flex-row",
-      )}
-    >
-      {/* Avatar */}
+    <div className={cn("flex items-start gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
       <div
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
-        style={{
-          backgroundColor: isUser ? "var(--text)" : "var(--accent-soft)",
-        }}
+        style={{ backgroundColor: isUser ? "var(--text)" : "var(--accent-soft)" }}
       >
         {isUser ? (
           <User className="h-3.5 w-3.5" style={{ color: "var(--bg-canvas)" }} />
@@ -552,12 +467,9 @@ function MessageBubble({ message }: { message: Message }) {
         )}
       </div>
 
-      {/* Bubble content */}
       <div
         className="max-w-[80%] rounded-2xl px-4 py-2.5"
         style={{
-          // 用户气泡走"反色": 背景 = text 色, 文字 = bg-canvas 色
-          // 永远高对比, 不受主题影响 (iMessage 风格)
           backgroundColor: isUser ? "var(--text)" : "var(--surface)",
           color: isUser ? "var(--bg-canvas)" : "var(--text)",
           borderTopRightRadius: isUser ? "4px" : undefined,
@@ -565,32 +477,57 @@ function MessageBubble({ message }: { message: Message }) {
         }}
       >
         {isUser ? (
-          <p
-            className="text-sm whitespace-pre-wrap break-words"
-            style={{ color: "var(--bg-canvas)" }}
-          >
+          <p className="whitespace-pre-wrap break-words text-sm" style={{ color: "var(--bg-canvas)" }}>
             {message.content}
           </p>
         ) : (
           <div>
             <MarkdownRenderer>{message.content}</MarkdownRenderer>
 
-            {/* Source citations */}
             {message.sources && message.sources.length > 0 && (
               <div className="mt-3 space-y-1 border-t border-[var(--border)] pt-2">
-                <p className="text-[11px] font-medium text-[var(--muted)] mb-1">
-                  参考来源
-                </p>
-                {message.sources.map((src, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-1.5 text-[11px] text-[var(--muted)]"
-                  >
+                <p className="mb-1 text-[11px] font-medium text-[var(--muted)]">参考来源</p>
+                {message.sources.map((source, index) => (
+                  <div key={`${source.file}-${source.section}-${index}`} className="flex items-start gap-1.5 text-[11px] text-[var(--muted)]">
                     <FileText className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>
-                      {src.file}
-                      {src.section ? ` · ${src.section}` : ""}
+                      {source.file}
+                      {source.section ? ` / ${source.section}` : ""}
                     </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {message.evidence && message.evidence.length > 0 && (
+              <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-2">
+                <p className="mb-1 text-[11px] font-medium text-[var(--muted)]">资料调查证据</p>
+                {message.evidence.map((evidence, index) => (
+                  <div
+                    key={`${evidence.file}-${evidence.section ?? evidence.title}-${index}`}
+                    className="rounded-xl border px-3 py-2"
+                    style={{
+                      backgroundColor: "var(--bg-canvas)",
+                      borderColor: "var(--border)",
+                    }}
+                  >
+                    <div className="flex items-start gap-2">
+                      <FileSearch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent-color)]" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="font-medium text-[var(--text)]">{evidence.title}</span>
+                          <span className="rounded-full bg-[var(--chip)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                            {evidence.sourceType}
+                          </span>
+                          <span className="text-[var(--muted)]">相关度 {evidence.relevance}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-[var(--muted)]">
+                          {evidence.file}
+                          {evidence.section ? ` / ${evidence.section}` : ""}
+                        </div>
+                        <p className="mt-1 text-[12px] leading-5 text-[var(--text)]">{evidence.snippet}</p>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
