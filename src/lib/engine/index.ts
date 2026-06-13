@@ -23,13 +23,16 @@ export {
   K, DELTA_H, N_SCALE, DT_MONTH_SEC, DT_TO_YI, DT_FROM_YI, MONTH_HOURS,
   MONTH_ORDER, IRRIG_MONTHS,
   FLOOD_DATA,
+  setFloods,
+  setZvTable, setZqTable,
   get_new_series, get_Q_AVG_MS, get_ANNUAL_RUNOFF_YI,
   q_year_for_storage_yi, build_year_items, qp_records_for_each_year,
+  setScalars,
 } from './curves';
 export type { SchemeConfig, SpillwayConfig, EconConfig, FengtanLoss, QpRecord, YearItem } from './curves';
 
 // 径流 (runoff.ts)
-export { YEARS, RAW_MONTHLY, load_runoff, get_new_series as getNewSeries } from './runoff';
+export { YEARS, RAW_MONTHLY, load_runoff, get_new_series as getNewSeries, setRunoff } from './runoff';
 
 // 差积曲线 (diffCurve.ts)
 export { differenceCurve, storageRequiredForQYear, qYearForStorage } from './diffCurve';

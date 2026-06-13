@@ -2,14 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { EvidenceRef, QuestionKind } from "./types";
 
-interface MaterialFile {
+export interface MaterialFile {
   title: string;
   path: string;
   sourceType: EvidenceRef["sourceType"];
   sectionHint?: string;
 }
 
-interface MaterialChunk {
+export interface MaterialChunk {
   title: string;
   file: string;
   sourceType: EvidenceRef["sourceType"];
@@ -21,7 +21,7 @@ const WORKBENCH_ROOT = process.cwd();
 const CODE_ROOT = path.resolve(WORKBENCH_ROOT, "..");
 const PROJECT_ROOT = path.resolve(CODE_ROOT, "..");
 
-const MATERIAL_FILES: MaterialFile[] = [
+export const MATERIAL_FILES: ReadonlyArray<MaterialFile> = [
   {
     title: "课程任务书文本",
     path: path.resolve(PROJECT_ROOT, "pdf_text2.txt"),
@@ -51,12 +51,6 @@ const MATERIAL_FILES: MaterialFile[] = [
     path: path.resolve(CODE_ROOT, "flow.md"),
     sourceType: "project_doc",
     sectionHint: "流程说明",
-  },
-  {
-    title: "课程资料文本",
-    path: path.resolve(PROJECT_ROOT, "pdf_text.txt"),
-    sourceType: "dataset_note",
-    sectionHint: "课程资料",
   },
   {
     title: "Agent API 路由",
@@ -109,6 +103,10 @@ const MATERIAL_FILES: MaterialFile[] = [
 ];
 
 let chunkCache: MaterialChunk[] | null = null;
+
+export function getAllChunks(): MaterialChunk[] {
+  return loadMaterialChunks();
+}
 
 export function retrieveMaterials(
   question: string,
@@ -238,7 +236,7 @@ function normalizeText(text: string): string {
     .trim();
 }
 
-function tokenize(question: string): string[] {
+export function tokenize(question: string): string[] {
   const normalized = question.toLowerCase();
   const terms = normalized.match(/[a-z0-9_]+|[\u4e00-\u9fff]{2,}/g) ?? [];
   const expanded = new Set<string>();
@@ -255,7 +253,7 @@ function tokenize(question: string): string[] {
   return [...expanded].filter((term) => term.length >= 2);
 }
 
-function scoreChunk(chunk: MaterialChunk, question: string, kind: QuestionKind): number {
+export function scoreChunk(chunk: MaterialChunk, question: string, kind: QuestionKind): number {
   const haystack = `${chunk.title}\n${chunk.section ?? ""}\n${chunk.text}`.toLowerCase();
   const terms = tokenize(question);
   let score = 0;

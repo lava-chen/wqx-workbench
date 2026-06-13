@@ -1,10 +1,20 @@
-import type { AgentContext, AgentRequest, EvidenceRef, SourceRef } from "./types";
+import type {
+  AgentContext,
+  AgentRequest,
+  ChatMessage,
+  EvidenceRef,
+  SourceRef,
+  ToolCallRequest,
+  ToolTraceEntry,
+} from "./types";
 import { buildLocalFallback, buildUserPrompt, SYSTEM_PROMPT } from "./prompts";
 import { classify } from "./classify";
+import { executeTool, TOOL_DEFS, toTraceEntry } from "./tools";
 
 const DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
 const DEFAULT_BASE = "https://openrouter.ai/api/v1";
 const DEFAULT_TIMEOUT = 45_000;
+const MAX_TOOL_ROUNDS = 3;
 
 export interface LLMConfig {
   apiKey: string | null;
@@ -32,9 +42,11 @@ export interface LLMCallResult {
   answer: string;
   sources: SourceRef[];
   evidence?: EvidenceRef[];
+  toolTrace?: ToolTraceEntry[];
   model: string;
   tokensIn?: number;
   tokensOut?: number;
+  toolRounds: number;
   fallback: boolean;
 }
 
@@ -52,6 +64,7 @@ export async function callLLM({ ctx, req, evidence = [] }: LLMCallInput): Promis
       sources: mergeSources(fallback.sources, evidence),
       evidence,
       model: "local-fallback",
+      toolRounds: 0,
       fallback: true,
     };
   }
@@ -60,44 +73,101 @@ export async function callLLM({ ctx, req, evidence = [] }: LLMCallInput): Promis
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
 
   try {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cfg.apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:3000",
-        "X-Title": "wqx-workbench agent",
-      },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 1800,
-        temperature: 0.2,
-      }),
-      signal: controller.signal,
-    });
+    const messages: ChatMessage[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ];
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`OpenRouter HTTP ${res.status}: ${text.slice(0, 300)}`);
+    const trace: ToolTraceEntry[] = [];
+    let totalTokensIn = 0;
+    let totalTokensOut = 0;
+    let answer = "";
+    let lastModel = cfg.model;
+    let rounds = 0;
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:3000",
+          "X-Title": "wqx-workbench agent",
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          messages,
+          tools: TOOL_DEFS,
+          tool_choice: "auto",
+          max_tokens: 1800,
+          temperature: 0.2,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`OpenRouter HTTP ${res.status}: ${text.slice(0, 300)}`);
+      }
+
+      const data = await res.json();
+      const msg = data?.choices?.[0]?.message;
+      if (data?.usage) {
+        totalTokensIn += data.usage.prompt_tokens ?? 0;
+        totalTokensOut += data.usage.completion_tokens ?? 0;
+      }
+      if (data?.model) lastModel = data.model;
+
+      const toolCalls = (msg?.tool_calls ?? []) as ToolCallRequest[];
+
+      // 终止条件: 没有 tool_calls, 把 content 当最终答案
+      if (toolCalls.length === 0) {
+        answer = (msg?.content ?? "").trim();
+        if (!answer) {
+          throw new Error("OpenRouter returned empty content (no tool_calls, no content)");
+        }
+        rounds = round;
+        break;
+      }
+
+      // 把 assistant 这条消息 (含 tool_calls) 推回历史
+      messages.push({
+        role: "assistant",
+        content: msg?.content ?? null,
+        tool_calls: toolCalls,
+      });
+
+      // 执行每个 tool, 把结果推回历史
+      for (const tc of toolCalls) {
+        const result = executeTool(tc.function.name, tc.function.arguments);
+        trace.push(toTraceEntry(round, tc.function.name, tc.function.arguments, result));
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: result.ok ? result.content : `[ERROR] ${result.error ?? "unknown"}`,
+        });
+      }
+
+      // 已用满 max 轮 → 下一轮强制不要 tool_calls, 让 LLM 总结
+      if (round === MAX_TOOL_ROUNDS - 1) {
+        // 继续循环, 让最后一轮拿到 final answer
+      }
     }
 
-    const data = await res.json();
-    const answer: string = data?.choices?.[0]?.message?.content?.trim() || "";
     if (!answer) {
-      throw new Error("OpenRouter returned empty content");
+      throw new Error("OpenRouter did not return a final answer after tool rounds");
     }
 
     return {
       answer,
       sources: mergedSources,
       evidence,
-      model: cfg.model,
-      tokensIn: data?.usage?.prompt_tokens,
-      tokensOut: data?.usage?.completion_tokens,
+      toolTrace: trace,
+      model: lastModel,
+      tokensIn: totalTokensIn || undefined,
+      tokensOut: totalTokensOut || undefined,
+      toolRounds: rounds,
       fallback: false,
     };
   } catch (error) {
@@ -110,6 +180,7 @@ export async function callLLM({ ctx, req, evidence = [] }: LLMCallInput): Promis
       sources: mergeSources(fallback.sources, evidence),
       evidence,
       model: `${cfg.model} (fallback)`,
+      toolRounds: 0,
       fallback: true,
     };
   } finally {

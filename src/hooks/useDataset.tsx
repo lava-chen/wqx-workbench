@@ -35,6 +35,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  // 标量 (只读, 编辑通过 setScalars)
   Q_SAFE, R0, T_BUILD, T_RUN, T_FIRE, T_LIFE, H_ECON,
   P_FLOOD_DOWN, P_DESIGN, P_CHECK, P_GEN,
   IRRIG_Q, LOCK_Q, SED_YEAR, WIND_V, WIND_D,
@@ -42,8 +43,14 @@ import {
   FIRE_KWH_COST, MINE_KWH_COST, FIRE_FUEL_COST,
   FIRE_OP_FACTOR, FIRE_SCALE_CAP, FIRE_SCALE_E,
   Z_V_TABLE, Z_Q_TABLE, FLOOD_DATA,
+  // 批量写入函数 (在 engine 模块内完成赋值, 绕过 ESM 限制)
+  setScalars,
+  setRunoff,
+  setZvTable,
+  setZqTable,
+  setFloods,
+  YEARS, RAW_MONTHLY,
 } from "@/lib/engine";
-import { YEARS, RAW_MONTHLY } from "@/lib/engine";
 
 // ============================================================
 // 类型: 单个标量的元数据 (供 DataPage UI 渲染 input 时取 min/max/hint)
@@ -206,52 +213,37 @@ function saveToStorage(snap: DatasetSnapshot): void {
 // ============================================================
 // 写回 engine (in-place mutation)
 // ─────────────────────────────────────────────────────────
-// 设计约束: Next.js 16 + Turbopack 把 `export const X = 1` 编译为 ESM
-// live binding (只读 getter), 外部模块无法用 `X = 2` 覆盖.
+// 设计约束: Next.js 16 + Turbopack 把 `export let X = 1` 编译为 ESM
+// live binding, 外部模块无法用 `X = 2` 直接覆盖 (TS 报错 + 运行时
+// ESM live binding 也不支持跨模块赋值).
 //
-// 但有两类引用可以从外部修改:
-//   (1) 对象引用 `const OBJ = { ... }`  → 改属性 OBJ.k = v
-//   (2) 数组引用 `const ARR = [...]`    → 改元素或 length=0 + push
+// 解决: 在 engine 模块内 (curves.ts / runoff.ts) 提供单一 setter
+// 函数, 内部完成赋值. 外部只需调用 setter, ESM live binding 会
+// 让所有 `import { Q_SAFE }` 的下游立即看到新值.
 //
-// useSchemes 走的是 (1) (改 Record 子对象的属性),
-// useDataset 之前想走的"标量整体替换"是 (1)(2) 都不适用的第 3 类 —
-// **因此目前** 标量仅在内存中维护 (useDataset.data.scalars),
-// 不同步回 engine 常量. 这意味着改了 Q_SAFE 等标量后, 下游
-// 计算页 (观测台、对比、调洪图) 暂不会重算; DataPage 自己能
-// 实时显示. 这是已知的"阶段 1+2"边界 — 完整接入需要改造
-// useAllResults / flood / economic / summary 等多个文件改从
-// useDataset 读, 超出本次范围. 后续可作为阶段 3 推进.
-//
-// 二维数据 (YEARS / RAW_MONTHLY / Z_V_TABLE / Z_Q_TABLE / FLOOD_DATA)
-// 走的是 (1)(2) — 数组引用, in-place 改 length + push 可行.
+// useSchemes 走的是"对象属性赋值" (改 Record 子对象的属性), 不受影响.
+// useDataset 走"标量 + 数组"路径, 用 setter 统一写回.
 // ============================================================
 
-function applyScalarsToEngine(_s: Record<ScalarKey, number>): void {
-  // 当前 no-op — 见上方说明.
+function applyScalarsToEngine(s: Record<ScalarKey, number>): void {
+  // 单一函数一次性写回 24 个标量
+  setScalars(s);
 }
 
 function applyRunoffToEngine(years: number[], raw: number[][]): void {
-  (YEARS as any).length = 0;
-  (YEARS as any).push(...years);
-  (RAW_MONTHLY as any).length = 0;
-  for (const row of raw) (RAW_MONTHLY as any).push([...row]);
+  setRunoff(years, raw);
 }
 
 function applyZvToEngine(zv: [number, number, number][]): void {
-  (Z_V_TABLE as any).length = 0;
-  for (const row of zv) (Z_V_TABLE as any).push([row[0], row[1], row[2]]);
+  setZvTable(zv);
 }
 
 function applyZqToEngine(zq: [number, number][]): void {
-  (Z_Q_TABLE as any).length = 0;
-  for (const row of zq) (Z_Q_TABLE as any).push([row[0], row[1]]);
+  setZqTable(zq);
 }
 
 function applyFloodsToEngine(floods: Record<string, number[]>): void {
-  for (const k of Object.keys(FLOOD_DATA)) delete (FLOOD_DATA as any)[k];
-  for (const k of Object.keys(floods)) {
-    (FLOOD_DATA as any)[k] = [...floods[k]];
-  }
+  setFloods(floods);
 }
 
 function applyAllToEngine(snap: DatasetSnapshot): void {
@@ -391,6 +383,164 @@ function validateAndNormalize(raw: unknown): DatasetSnapshot {
 }
 
 // ============================================================
+// CSV 解析: 径流 (年份 + 4~3 月, 12 列)
+// ─────────────────────────────────────────────────────────
+// 支持两种常见布局:
+//   A) 带中文/数字表头, 第一列年份, 后续 12 列为 4~3 月流量
+//      例: 年,4月,5月,6月,7月,8月,9月,10月,11月,12月,1月,2月,3月
+//   B) 无表头或表头只是列号, 第一列年份
+//      例: 1950,120,180,250,...
+//   C) 13 列纯数据 (无年份列) — 用 1950+i+3 反推
+// 月份顺序: 嗅探表头数字, 1→12 视为 1~12 月; 中文 "X月" 取 X; 默认 4~3
+// ============================================================
+
+const MONTHS_4_TO_3 = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
+
+function parseCsvLine(line: string): string[] {
+  // 简单 CSV: 不支持引号转义 (径流数据无逗号内嵌, 够用)
+  return line.split(",").map((c) => c.trim());
+}
+
+function sniffMonthOrder(headerCells: string[]): number[] | null {
+  // headerCells 长度 12 (假设已剔除年份列)
+  const result: number[] = [];
+  for (const cell of headerCells) {
+    const m = /(\d{1,2})/.exec(cell.replace(/\s/g, ""));
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (n < 1 || n > 12) return null;
+    result.push(n);
+  }
+  if (result.length !== 12) return null;
+  return result;
+}
+
+function parseRunoffCsv(text: string): { years: number[]; raw: number[][] } {
+  // 去除 BOM, 按换行分割, 过滤空行
+  const lines = text
+    .replace(/^﻿/, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length < 2) {
+    throw new DatasetImportError("CSV 至少需要表头 + 1 行数据");
+  }
+
+  const header = parseCsvLine(lines[0]);
+  const dataLines = lines.slice(1);
+
+  // 判断是否有表头: 表头单元若包含非数字字符 (如 "年"/"year"/"月"/"m"), 视为表头
+  const headerIsText = header.some((c) => /[^\d.\-eE+]/.test(c));
+  const numericHeader = headerIsText ? null : header;
+
+  // 嗅探列数与年份列位置
+  let yearCol = -1;
+  let monthOrder: number[] | null = null;
+  let monthCells: string[];
+
+  if (headerIsText) {
+    // 找年份列
+    yearCol = header.findIndex((c) => /(年|year|yr|水文年)/i.test(c));
+    if (yearCol < 0) {
+      // 没找到显式年份列, 假设第 0 列是年份
+      yearCol = 0;
+    }
+    // 提取除年份列外的所有表头, 应该正好 12 个
+    monthCells = header.filter((_, i) => i !== yearCol);
+    if (monthCells.length !== 12) {
+      throw new DatasetImportError(
+        `表头月份列数应为 12, 实际 ${monthCells.length}`,
+      );
+    }
+    monthOrder = sniffMonthOrder(monthCells);
+    if (!monthOrder) {
+      throw new DatasetImportError(
+        "月份表头无法识别, 应为 '4月'~'3月' 或 '1'~'12'",
+      );
+    }
+  } else {
+    // 纯数字表头 / 无表头
+    if (header.length === 13) {
+      yearCol = 0;
+      monthOrder = [...MONTHS_4_TO_3];
+    } else if (header.length === 12) {
+      yearCol = -1;
+      monthOrder = [...MONTHS_4_TO_3];
+    } else {
+      throw new DatasetImportError(
+        `列数应为 12 (无年份) 或 13 (含年份), 实际 ${header.length}`,
+      );
+    }
+  }
+
+  // 解析数据行
+  const allLines: string[] = numericHeader
+    ? [numericHeader.join(","), ...dataLines]
+    : dataLines;
+  const rows = allLines.map((line, idx) => {
+      const cells = parseCsvLine(line);
+      if (cells.length < 12) {
+        throw new DatasetImportError(
+          `第 ${idx + (headerIsText ? 2 : 1)} 行列数不足 12`,
+        );
+      }
+      const values: number[] = [];
+      let year = NaN;
+      if (yearCol >= 0) {
+        year = Number(cells[yearCol]);
+        if (!Number.isFinite(year) || year < 1800 || year > 2200) {
+          throw new DatasetImportError(
+            `第 ${idx + (headerIsText ? 2 : 1)} 行年份无效: ${cells[yearCol]}`,
+          );
+        }
+      }
+      // 提取 12 个月值
+      const monthCellsRow = cells.filter((_, i) => i !== yearCol);
+      for (let k = 0; k < 12; k++) {
+        const v = Number(monthCellsRow[k]);
+        if (!Number.isFinite(v) || v < 0) {
+          throw new DatasetImportError(
+            `第 ${idx + (headerIsText ? 2 : 1)} 行第 ${k + 1} 月流量无效: ${monthCellsRow[k]}`,
+          );
+        }
+        values.push(v);
+      }
+      return { year, values };
+    },
+  );
+
+  if (rows.length === 0) {
+    throw new DatasetImportError("无有效数据行");
+  }
+
+  // 年份列缺失时, 按 "1950/4 起" 推算
+  if (yearCol < 0) {
+    const startYear = 1950;
+    for (let i = 0; i < rows.length; i++) {
+      // 水文年: 第 0 行 = 1950/4~1951/3, 第 1 行 = 1951/4~1952/3 ...
+      rows[i].year = startYear + i;
+    }
+  }
+
+  const years = rows.map((r) => Math.round(r.year));
+  const raw = rows.map((r) => r.values);
+
+  // 校验月份顺序: 若与默认 4~3 不同, 重排成 4~3 顺序
+  if (monthOrder && monthOrder.join(",") !== MONTHS_4_TO_3.join(",")) {
+    const order = monthOrder.slice();
+    const remapped = raw.map((row) => {
+      const out = new Array(12);
+      for (let k = 0; k < 12; k++) out[MONTHS_4_TO_3.indexOf(order[k])] = row[k];
+      return out;
+    });
+    return { years, raw: remapped };
+  }
+
+  return { years, raw };
+}
+
+// ============================================================
 // Context
 // ============================================================
 
@@ -415,6 +565,8 @@ interface DatasetContextType {
   setFlood: (key: string, series: number[]) => void;
   /** 从 JSON 字符串加载 (会做 schema 校验) */
   importJson: (jsonText: string) => void;
+  /** 从 CSV 字符串加载径流 (年份 + 12 个月). 支持带表头 / 不带表头 / 中文月份名. */
+  importCsv: (csvText: string) => void;
   /** 序列化为 JSON 字符串 (供下载 / 复制) */
   exportJson: () => string;
   /** 复位到任务书默认值 */
@@ -498,6 +650,13 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
     setData(snap);
   }, []);
 
+  // ── CSV (径流) ──
+  const importCsv = useCallback((csvText: string) => {
+    const { years, raw } = parseRunoffCsv(csvText);
+    // 走与 setRunoff 相同的写回路径: 仅替换 raw_monthly + years, 其它字段保持
+    setData((prev) => ({ ...prev, years, raw_monthly: raw }));
+  }, []);
+
   const exportJson = useCallback(() => {
     return JSON.stringify(data, null, 2);
   }, [data]);
@@ -558,6 +717,7 @@ export function DatasetProvider({ children }: { children: ReactNode }) {
     setZq,
     setFlood,
     importJson,
+    importCsv,
     exportJson,
     reset,
   };
@@ -585,6 +745,7 @@ export function useDataset(): DatasetContextType {
       setZq: () => {},
       setFlood: () => {},
       importJson: () => {},
+      importCsv: () => {},
       exportJson: () => JSON.stringify(snapshotFromEngine(), null, 2),
       reset: () => {},
     };

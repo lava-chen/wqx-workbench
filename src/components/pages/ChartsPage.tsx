@@ -3,14 +3,13 @@
 import { useState, useMemo } from "react";
 import { useAllResults } from "@/hooks/useAllResults";
 import { useParams } from "@/hooks/useParams";
+import { useSchemePalette } from "@/hooks/useSchemePalette";
 import {
-  SCHEMES,
   Z_V_TABLE,
   Z_Q_TABLE,
   z_to_v,
-  v_to_z,
-  q_to_zd,
   ECON,
+  SCHEMES,
   Q_SAFE as ENGINE_Q_SAFE,
   R0 as ENGINE_R0,
 } from "@/lib/engine";
@@ -61,25 +60,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 // ============================================================
-// 颜色方案
-// ============================================================
-const COLORS: Record<string, string> = {
-  I: "#1f77b4",
-  II: "#ff7f0e",
-  III: "#2ca02c",
-  IV: "#d62728",
-};
-
-const SCHEME_KEYS = ["I", "II", "III", "IV"] as const;
-
-const SCHEME_LABELS: Record<string, string> = {
-  I: "方案 I",
-  II: "方案 II",
-  III: "方案 III",
-  IV: "方案 IV",
-};
-
-// ============================================================
 // 图表标签配置
 // ============================================================
 const CHART_TABS = [
@@ -99,12 +79,12 @@ const CHART_TABS = [
   { value: "compare_econ", label: "对比·经济" },
   { value: "compare_overview", label: "对比·综合概览" },
   // ---- 水库调度图 (fig_dispatch_{I,II,III,IV}, 防破坏线 + 调度规则) ----
-  { value: "dispatch", label: "调度图·4 方案" },
+  { value: "dispatch", label: "调度图·多方案" },
   // ---- 调洪过程线 (fig_flood_routing_*, 双 Y 轴 + Q_in 阶梯) ----
-  { value: "flood_2x2_p5", label: "调洪·P=5% 2×2" },
-  { value: "flood_2x2_p01", label: "调洪·P=0.1% 2×2" },
-  { value: "flood_2x2_p001", label: "调洪·P=0.01% 2×2" },
-  { value: "flood_all_4x3", label: "调洪·4×3 全景" },
+  { value: "flood_2x2_p5", label: "调洪·P=5%" },
+  { value: "flood_2x2_p01", label: "调洪·P=0.1%" },
+  { value: "flood_2x2_p001", label: "调洪·P=0.01%" },
+  { value: "flood_all_4x3", label: "调洪·多方案多标准" },
 ];
 
 // ============================================================
@@ -155,6 +135,7 @@ export function ChartsPage() {
   const [activeChart, setActiveChart] = useState("chart1");
   const { waterResults, floodResults, econ } = useAllResults();
   const { params, isModified, defaults } = useParams();
+  const { schemes: SCHEME_KEYS, colorById: COLORS, labelById: SCHEME_LABELS } = useSchemePalette();
 
   // ---- Chart 1: 水位-库容曲线数据 ----
   const zvData = useMemo(
@@ -174,6 +155,7 @@ export function ChartsPage() {
     return SCHEME_KEYS.map((sk) => {
       const row = econ.find((e) => e.scheme === sk);
       const cfg = ECON[sk];
+      if (!cfg) return null;
       const totalInvest = cfg.dam_invest + cfg.mech_invest + cfg.temp_invest;
       return {
         scheme: SCHEME_LABELS[sk],
@@ -182,8 +164,8 @@ export function ChartsPage() {
         年费用: row ? Math.round(row.annual_total) : 0,
         _key: sk,
       };
-    });
-  }, [econ]);
+    }).filter(Boolean);
+  }, [econ, SCHEME_KEYS, SCHEME_LABELS]);
 
   // ---- Chart 4: 装机-电能关系数据 ----
   const nyData = useMemo(() => {
@@ -196,7 +178,7 @@ export function ChartsPage() {
         _key: sk,
       };
     });
-  }, [waterResults]);
+  }, [waterResults, SCHEME_KEYS, SCHEME_LABELS]);
 
   // ---- Chart 5: 雷达图数据 ----
   const radarData = useMemo(() => {
@@ -214,7 +196,7 @@ export function ChartsPage() {
       };
     });
     return normalizeMetrics(raw);
-  }, [waterResults, floodResults, econ]);
+  }, [waterResults, floodResults, econ, SCHEME_KEYS]);
 
   // ---- Chart 6 & 7: 电能 & 利用小时数数据 ----
   const energyBarData = useMemo(() => {
@@ -230,7 +212,7 @@ export function ChartsPage() {
         _key: sk,
       };
     });
-  }, [waterResults]);
+  }, [waterResults, SCHEME_KEYS, SCHEME_LABELS]);
 
   // ---- 方案水位参考线 ----
   const schemeRefLines = useMemo(() => {
@@ -241,7 +223,7 @@ export function ChartsPage() {
       label: string;
     }> = [];
     for (const sk of SCHEME_KEYS) {
-      const baseZ = SCHEMES[sk].Z_zheng;
+      const baseZ = SCHEMES[sk]?.Z_zheng ?? 0;
       const offset = params.Z_zheng_offset[sk] || 0;
       const adjustedZ = baseZ + offset;
       lines.push({
@@ -261,7 +243,7 @@ export function ChartsPage() {
       }
     }
     return lines;
-  }, [waterResults, params.Z_zheng_offset]);
+  }, [waterResults, params.Z_zheng_offset, SCHEME_KEYS, COLORS, SCHEME_LABELS]);
 
   // ---- 渲染工具函数 ----
   function chartCard(title: string, children: React.ReactNode) {

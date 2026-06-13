@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useAllResults } from "@/hooks/useAllResults";
 import { useParams } from "@/hooks/useParams";
+import { useSchemes } from "@/hooks/useSchemes";
 import { cn } from "@/lib/utils";
 import {
   FileText,
@@ -820,7 +821,10 @@ function StepTablePanel({
 export function CalculationChainPage() {
   const results = useAllResults();
   const { params, isModified, defaults, setScheme } = useParams();
+  const { schemes: schemeList, version: schemeVersion } = useSchemes();
   const { waterResults, floodResults, table, econ } = results;
+  // 动态方案 id 列表 (默认 4 方案 + 用户新增 V/VI/...)
+  const schemeIds = useMemo(() => schemeList.map((s) => s.id), [schemeList, schemeVersion]);
 
   // --- Node 1 data: runoff ---
   const node1Data = useMemo(() => {
@@ -832,20 +836,22 @@ export function CalculationChainPage() {
   // --- Node 2 data: dead level ---
   const node2Data = useMemo(() => {
     const data: Record<string, ReturnType<typeof computeDeadLevel>> = {};
-    for (const sk of ["I", "II", "III", "IV"] as const) {
+    for (const sk of schemeIds) {
+      if (!SCHEMES[sk]) continue;
       data[sk] = computeDeadLevel(sk);
     }
     return data;
-  }, []);
+  }, [schemeIds]);
 
   // --- Node 3 data: firm power ---
   const node3Data = useMemo(() => {
     const data: Record<string, ReturnType<typeof findNpForScheme>> = {};
-    for (const sk of ["I", "II", "III", "IV"] as const) {
+    for (const sk of schemeIds) {
+      if (!SCHEMES[sk]) continue;
       data[sk] = findNpForScheme(sk);
     }
     return data;
-  }, []);
+  }, [schemeIds]);
 
   // --- Node 4 data: installed capacity ---
   const node4Data = useMemo(() => {
@@ -856,18 +862,25 @@ export function CalculationChainPage() {
         repeat: ReturnType<typeof find_repeat_capacity>;
       }
     >;
-    for (const sk of ["I", "II", "III", "IV"] as const) {
-      const Np_wan = waterResults[sk].Np_wan;
+    for (const sk of schemeIds) {
+      const wr = waterResults[sk];
+      if (!wr) continue; // 引擎未提供完整依赖 (新方案写回失败等)
+      const Np_wan = wr.Np_wan;
       const inst = calcInstalled(Np_wan, sk);
       const dead = node2Data[sk];
+      if (!dead) continue;
       const repeat = find_repeat_capacity(sk, dead.Z_dead, Np_wan, inst.N_bi);
       data[sk] = { inst, repeat };
     }
     return data;
-  }, [waterResults, node2Data]);
+  }, [schemeIds, waterResults, node2Data]);
 
   // --- Selected scheme for focused display ---
-  const FOCUS = params.scheme || "II";
+  // 优先用 params.scheme, 但若该方案已被删除则回退到第一个存在的方案
+  const FOCUS = useMemo(() => {
+    if (params.scheme && schemeIds.includes(params.scheme)) return params.scheme;
+    return schemeIds[0] ?? "II";
+  }, [params.scheme, schemeIds]);
 
   // --- Expand state ---
   const [expanded, setExpanded] = useState<Set<number>>(new Set([7]));
@@ -1522,8 +1535,9 @@ export function CalculationChainPage() {
         </div>
         {/* Scheme switcher */}
         <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 border border-slate-200">
-          {(["I", "II", "III", "IV"] as const).map((sk) => {
+          {schemeIds.map((sk) => {
             const active = FOCUS === sk;
+            const zZheng = SCHEMES[sk]?.Z_zheng;
             return (
               <button
                 key={sk}
@@ -1534,7 +1548,11 @@ export function CalculationChainPage() {
                     ? "bg-white text-slate-800 shadow-sm"
                     : "text-slate-500 hover:text-slate-700",
                 )}
-                title={`方案 ${sk} (正常蓄水位 ${SCHEMES[sk].Z_zheng} m)`}
+                title={
+                  zZheng != null
+                    ? `方案 ${sk} (正常蓄水位 ${zZheng} m)`
+                    : `方案 ${sk} (数据缺失)`
+                }
               >
                 方案 {sk}
               </button>

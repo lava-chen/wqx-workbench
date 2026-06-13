@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
   console.log(
     `[agent] kind=${cls.kind} model=${result.model} ` +
     `fallback=${result.fallback} elapsed=${elapsed}ms ` +
-    `evidence=${evidence.length} tokens=${result.tokensIn ?? "?"}/${result.tokensOut ?? "?"}`,
+    `evidence=${evidence.length} toolRounds=${result.toolRounds} ` +
+    `tokens=${result.tokensIn ?? "?"}/${result.tokensOut ?? "?"}`,
   );
 
   const response: AgentResponse = {

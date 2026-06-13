@@ -5,6 +5,7 @@ import {
   AlertCircle,
   Bot,
   Check,
+  ChevronDown,
   Copy,
   FileSearch,
   FileText,
@@ -453,6 +454,8 @@ export function AgentAuditPage() {
 
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
+  const [showSources, setShowSources] = useState(false);
+  const [showEvidence, setShowEvidence] = useState(false);
 
   return (
     <div className={cn("flex items-start gap-3", isUser ? "flex-row-reverse" : "flex-row")}>
@@ -485,51 +488,89 @@ function MessageBubble({ message }: { message: Message }) {
             <MarkdownRenderer>{message.content}</MarkdownRenderer>
 
             {message.sources && message.sources.length > 0 && (
-              <div className="mt-3 space-y-1 border-t border-[var(--border)] pt-2">
-                <p className="mb-1 text-[11px] font-medium text-[var(--muted)]">参考来源</p>
-                {message.sources.map((source, index) => (
-                  <div key={`${source.file}-${source.section}-${index}`} className="flex items-start gap-1.5 text-[11px] text-[var(--muted)]">
-                    <FileText className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>
-                      {source.file}
-                      {source.section ? ` / ${source.section}` : ""}
-                    </span>
+              <div className="mt-3 border-t border-[var(--border)] pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSources((v) => !v)}
+                  className="mb-1 flex w-full items-center gap-1.5 text-left text-[11px] font-medium text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 transition-transform duration-200",
+                      !showSources && "-rotate-90",
+                    )}
+                  />
+                  <span>参考来源</span>
+                  <span className="rounded-full bg-[var(--chip)] px-1.5 py-0.5 text-[10px] tabular-nums">
+                    {message.sources.length}
+                  </span>
+                </button>
+                {showSources && (
+                  <div className="space-y-1">
+                    {message.sources.map((source, index) => (
+                      <div key={`${source.file}-${source.section}-${index}`} className="flex items-start gap-1.5 text-[11px] text-[var(--muted)]">
+                        <FileText className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          {source.file}
+                          {source.section ? ` / ${source.section}` : ""}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
 
             {message.evidence && message.evidence.length > 0 && (
-              <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-2">
-                <p className="mb-1 text-[11px] font-medium text-[var(--muted)]">资料调查证据</p>
-                {message.evidence.map((evidence, index) => (
-                  <div
-                    key={`${evidence.file}-${evidence.section ?? evidence.title}-${index}`}
-                    className="rounded-xl border px-3 py-2"
-                    style={{
-                      backgroundColor: "var(--bg-canvas)",
-                      borderColor: "var(--border)",
-                    }}
-                  >
-                    <div className="flex items-start gap-2">
-                      <FileSearch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent-color)]" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="font-medium text-[var(--text)]">{evidence.title}</span>
-                          <span className="rounded-full bg-[var(--chip)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
-                            {evidence.sourceType}
-                          </span>
-                          <span className="text-[var(--muted)]">相关度 {evidence.relevance}</span>
+              <div className="mt-3 border-t border-[var(--border)] pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEvidence((v) => !v)}
+                  className="mb-1 flex w-full items-center gap-1.5 text-left text-[11px] font-medium text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 transition-transform duration-200",
+                      !showEvidence && "-rotate-90",
+                    )}
+                  />
+                  <span>资料调查证据</span>
+                  <span className="rounded-full bg-[var(--chip)] px-1.5 py-0.5 text-[10px] tabular-nums">
+                    {message.evidence.length}
+                  </span>
+                </button>
+                {showEvidence && (
+                  <div className="space-y-2">
+                    {message.evidence.map((evidence, index) => (
+                      <div
+                        key={`${evidence.file}-${evidence.section ?? evidence.title}-${index}`}
+                        className="rounded-xl border px-3 py-2"
+                        style={{
+                          backgroundColor: "var(--bg-canvas)",
+                          borderColor: "var(--border)",
+                        }}
+                      >
+                        <div className="flex items-start gap-2">
+                          <FileSearch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--accent-color)]" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                              <span className="font-medium text-[var(--text)]">{evidence.title}</span>
+                              <span className="rounded-full bg-[var(--chip)] px-2 py-0.5 text-[10px] text-[var(--muted)]">
+                                {evidence.sourceType}
+                              </span>
+                              <span className="text-[var(--muted)]">相关度 {evidence.relevance}</span>
+                            </div>
+                            <div className="mt-1 text-[11px] text-[var(--muted)]">
+                              {evidence.file}
+                              {evidence.section ? ` / ${evidence.section}` : ""}
+                            </div>
+                            <p className="mt-1 text-[12px] leading-5 text-[var(--text)]">{evidence.snippet}</p>
+                          </div>
                         </div>
-                        <div className="mt-1 text-[11px] text-[var(--muted)]">
-                          {evidence.file}
-                          {evidence.section ? ` / ${evidence.section}` : ""}
-                        </div>
-                        <p className="mt-1 text-[12px] leading-5 text-[var(--text)]">{evidence.snippet}</p>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>

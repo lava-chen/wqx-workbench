@@ -18,6 +18,7 @@ import {
 } from "@/lib/engine";
 import { useParams } from "./useParams";
 import { useDataset } from "./useDataset";
+import { useSchemes } from "./useSchemes";
 
 // ── Flood keys ───────────────────────────────────────────
 const FLOOD_DOWN_KEY = "P=5% (20年)";
@@ -198,10 +199,12 @@ function route_flood_with_offset(
 export function useAllResults() {
   const { params } = useParams();
   const { version: datasetVersion } = useDataset();
+  const { schemes: schemeList, version: schemeVersion } = useSchemes();
   const { Q_SAFE, R0, Z_zheng_offset } = params;
 
   return useMemo(() => {
-    const schemes = ["I", "II", "III", "IV"] as const;
+    // 动态方案列表 — 取 useSchemes 中实际存在的方案 id (默认 4 方案 + 用户新增 V/VI/...)
+    const schemes = schemeList.map((s) => s.id);
     const waterResults: Record<string, any> = {};
     const floodResults: Record<string, any> = {};
     const econResults: any[] = [];
@@ -209,6 +212,9 @@ export function useAllResults() {
     const q_in = load_all_floods();
 
     for (const sk of schemes) {
+      // 引擎若没有该方案数据 (例如新增方案写回失败) — 跳过
+      if (!SCHEMES[sk]) continue;
+
       const dead = computeDeadLevel(sk);
       const np = findNpForScheme(sk);
       const Np_wan = np.N_p / 1e4;
@@ -254,5 +260,5 @@ export function useAllResults() {
     const econ = localEconomicCompare(table, R0);
 
     return { waterResults, floodResults, table, econ, schemes };
-  }, [Q_SAFE, R0, Z_zheng_offset, datasetVersion]);
+  }, [schemeList, schemeVersion, Q_SAFE, R0, Z_zheng_offset, datasetVersion]);
 }

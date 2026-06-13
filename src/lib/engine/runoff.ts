@@ -18,7 +18,7 @@
 // ============================================================
 
 /** 水文年列表：1950 年 4 月 ~ 1981 年 3 月 */
-export const YEARS: readonly number[] = [
+export let YEARS: number[] = [
   1951, 1952, 1953, 1954, 1955, 1956, 1957, 1958, 1959, 1960,
   1961, 1962, 1963, 1964, 1965, 1966, 1967, 1968, 1969, 1970,
   1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978, 1979, 1980, 1981,
@@ -29,7 +29,7 @@ export const YEARS: readonly number[] = [
  * monthly[i][k] = 第 i 水文年, 第 k 月流量。
  * k=0..11 对应 4,5,6,7,8,9,10,11,12,1,2,3 月。
  */
-export const RAW_MONTHLY: readonly (readonly number[])[] = [
+export let RAW_MONTHLY: number[][] = [
   [3919,    3040,    1976.3,  2946.7,  525.3,   664.5,   1341,    683,     1170,    668.7,   1137.7,  2578.6],
   [2011,    5444.3,  3826.3,  3722,    4423.3,  2813.3,  2669.7,  1028.3,  703.3,   590.3,   843,     3013.7],
   [2488,    3562.3,  2909.3,  1710,    920.3,   1065.3,  2296.4,  2405,    857.6,   1459.3,  1095.7,  1082],
@@ -112,6 +112,24 @@ export function get_new_series(): { years: number[]; new_q: number[][] } {
     new_q[i] = row;
   }
   return { years: [...YEARS], new_q };
+}
+
+/**
+ * 批量写回 YEARS / RAW_MONTHLY (供 useDataset 编辑径流后调用)
+ * 与 curves.ts 的 setScalars 同样的设计: 在本模块内完成赋值,
+ * 外部不能直接修改 `let` 导出 (ESM 限制).
+ */
+export function setRunoff(years: number[], monthly: number[][]): void {
+  if (years.length !== monthly.length) {
+    throw new Error("YEARS 长度与 RAW_MONTHLY 行数必须一致");
+  }
+  YEARS.length = 0;
+  for (const y of years) YEARS.push(y);
+  RAW_MONTHLY.length = 0;
+  for (const row of monthly) RAW_MONTHLY.push([...row]);
+  // 重置派生缓存
+  _cached_q_avg = null;
+  _cached_annual_yi = null;
 }
 
 // ============================================================

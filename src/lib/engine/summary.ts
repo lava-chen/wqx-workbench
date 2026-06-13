@@ -83,9 +83,13 @@ export function calc_installed(
 export function build_table(water_deps: Record<string, WaterDeps>, flood_deps: Record<string, FloodDeps>): TableRow[] {
   const table: TableRow[] = [];
 
-  for (const sk of Object.keys(SCHEMES)) {
+  // 以调用方传入的 water_deps 键集为权威源, 跳过任何上游未提供完整依赖的方案。
+  // 这避免 SCHEMES 字典与动态方案列表不一致时 (新增/删除方案) 出现 undefined.Z_dead。
+  for (const sk of Object.keys(water_deps)) {
+    if (!SCHEMES[sk]) continue;
     const wd = water_deps[sk];
     const fd = flood_deps[sk];
+    if (!wd || !fd) continue;
 
     const Z_zheng = SCHEMES[sk].Z_zheng;
     const V_zheng = z_to_v(Z_zheng);

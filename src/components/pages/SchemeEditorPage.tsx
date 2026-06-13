@@ -396,7 +396,9 @@ function NumberInput({
           style={{
             backgroundColor: "var(--surface)",
             color: "var(--muted)",
-            borderLeft: "1px solid var(--border)",
+            borderLeftWidth: "1px",
+            borderLeftStyle: "solid",
+            borderLeftColor: "var(--border)",
           }}
         >
           {field.unit}
@@ -836,7 +838,13 @@ function ComparisonTable({
                   <tr
                     key={def.name}
                     style={{
-                      borderTop: idx === 0 ? "none" : "1px solid var(--border)",
+                      ...(idx === 0
+                        ? { borderTopWidth: 0, borderTopStyle: "none" }
+                        : {
+                            borderTopWidth: "1px",
+                            borderTopStyle: "solid",
+                            borderTopColor: "var(--border)",
+                          }),
                       backgroundColor: isAffected
                         ? "var(--accent-soft)"
                         : isOdd
@@ -882,7 +890,13 @@ function ComparisonTable({
                   </tr>
                 );
               })}
-              <tr style={{ borderTop: "2px solid var(--border)" }}>
+              <tr
+                style={{
+                  borderTopWidth: "2px",
+                  borderTopStyle: "solid",
+                  borderTopColor: "var(--border)",
+                }}
+              >
                 <td
                   className="sticky left-0 z-10 px-5 py-2.5 font-semibold"
                   style={{ backgroundColor: "var(--bg-canvas)", color: "var(--text)" }}

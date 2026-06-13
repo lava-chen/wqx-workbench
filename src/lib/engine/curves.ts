@@ -3,10 +3,19 @@
  * 来源: 任务书表 2 (Z-V)、表 3 (Z-q 下游)、表 7 (泄洪建筑)、表 8-11 (经济)
  */
 
+import { YEARS, RAW_MONTHLY } from "./runoff";
+// 重新导出, 保持向后兼容
+export { YEARS, RAW_MONTHLY };
+
 // ============================================================
 // 1. 水位-库容曲线 (任务书表 2)
 // ============================================================
+// 水位-库容曲线 (任务书表 2)
 // 高程 m, 容积 亿m3, 容积 m3/s·月
+//
+// 注意: 用 `let` 而非 `const`, 因为 useDataset 支持用户在 UI 中编辑
+// 这些数据并写回 engine. ESM live binding 允许下游 `import { Z_V_TABLE }`
+// 在 push/清空操作后看到最新值 (这是数组引用的特性).
 export const Z_V_TABLE: [number, number, number][] = [
   [50, 0, 0],
   [60, 0.241, 9.175],
@@ -20,9 +29,15 @@ export const Z_V_TABLE: [number, number, number][] = [
   [140, 151.578, 5770.97],
 ];
 
-const Z_ARR = Z_V_TABLE.map(r => r[0]);
-const V_YI = Z_V_TABLE.map(r => r[1]); // 亿 m3
-const V_MSM = Z_V_TABLE.map(r => r[2]); // m3/s·月
+// 插值用的扁平数组 — 每次都从 Z_V_TABLE 重新派生,
+// 保证 useDataset 改写后立即生效 (数组很短, 10 行, 性能可忽略)
+function zArrays() {
+  return {
+    Z_ARR: Z_V_TABLE.map(r => r[0]),
+    V_YI: Z_V_TABLE.map(r => r[1]),
+    V_MSM: Z_V_TABLE.map(r => r[2]),
+  };
+}
 
 // 线性插值工具
 function lerpArr(xs: number[], ys: number[], x: number): number {
@@ -39,15 +54,18 @@ function lerpArr(xs: number[], ys: number[], x: number): number {
 }
 
 export function z_to_v(z: number): number {
-  return lerpArr(Z_ARR, V_YI, z);
+  const a = zArrays();
+  return lerpArr(a.Z_ARR, a.V_YI, z);
 }
 
 export function v_to_z(v: number): number {
-  return lerpArr(V_YI, Z_ARR, v);
+  const a = zArrays();
+  return lerpArr(a.V_YI, a.Z_ARR, v);
 }
 
 export function z_to_v_msm(z: number): number {
-  return lerpArr(Z_ARR, V_MSM, z);
+  const a = zArrays();
+  return lerpArr(a.Z_ARR, a.V_MSM, z);
 }
 
 export function v_to_msm(v: number): number {
@@ -69,15 +87,21 @@ export const Z_Q_TABLE: [number, number][] = [
   [74.0, 43400],
 ];
 
-const ZQ_Z = Z_Q_TABLE.map(r => r[0]);
-const ZQ_Q = Z_Q_TABLE.map(r => r[1]);
+function zqArrays() {
+  return {
+    Z: Z_Q_TABLE.map(r => r[0]),
+    Q: Z_Q_TABLE.map(r => r[1]),
+  };
+}
 
 export function q_to_zd(q: number): number {
-  return lerpArr(ZQ_Q, ZQ_Z, q);
+  const a = zqArrays();
+  return lerpArr(a.Q, a.Z, q);
 }
 
 export function zd_to_q(zd: number): number {
-  return lerpArr(ZQ_Z, ZQ_Q, zd);
+  const a = zqArrays();
+  return lerpArr(a.Z, a.Q, zd);
 }
 
 // ============================================================
@@ -212,38 +236,101 @@ export const FIRE_INV_RATIO = [0, 0, 0.55, 0.40, 0.03, 0.02];
 export const MINE_INV_RATIO = [0.16, 0.34, 0.35, 0.10, 0.05, 0];
 
 // 折算率与寿命
-export const R0 = 0.10;
-export const T_BUILD = 11;
-export const T_RUN = 50;
-export const T_FIRE = 25;
+// 注意: 用 `let` 而非 `const` — useDataset 在用户编辑"关键参数"卡片后
+// 会直接对这些变量赋值, 进而让所有 `import { R0 }` 的下游模块看到新值
+// (ESM live binding 对 `let` 导出是支持的).
+export let R0 = 0.10;
+export let T_BUILD = 11;
+export let T_RUN = 50;
+export let T_FIRE = 25;
 
 // 替代指标
-export const FIRE_KWH_COST = 750;  // 元/千瓦
-export const MINE_KWH_COST = 0.07; // 元/度
-export const FIRE_FUEL_COST = 0.02; // 元/度
-export const FIRE_OP_FACTOR = 0.08;
-export const FIRE_SCALE_CAP = 1.1;
-export const FIRE_SCALE_E = 1.05;
+export let FIRE_KWH_COST = 750;  // 元/千瓦
+export let MINE_KWH_COST = 0.07; // 元/度
+export let FIRE_FUEL_COST = 0.02; // 元/度
+export let FIRE_OP_FACTOR = 0.08;
+export let FIRE_SCALE_CAP = 1.1;
+export let FIRE_SCALE_E = 1.05;
 
 // 经济利用小时
-export const H_ECON = 2500;
+export let H_ECON = 2500;
 
 // 设计参数
-export const P_FLOOD_DOWN = 0.05;
-export const P_DESIGN = 0.001;
-export const P_CHECK = 0.0001;
-export const Q_SAFE = 20000;
-export const P_GEN = 0.875;
-export const T_LIFE = 50;
-export const SED_YEAR = 669e4;
-export const IRRIG_Q = 35;
-export const LOCK_Q = 10;
+export let P_FLOOD_DOWN = 0.05;
+export let P_DESIGN = 0.001;
+export let P_CHECK = 0.0001;
+export let Q_SAFE = 20000;
+export let P_GEN = 0.875;
+export let T_LIFE = 50;
+export let SED_YEAR = 669e4;
+export let IRRIG_Q = 35;
+export let LOCK_Q = 10;
 export const SHIP_BASE = 10;
 export const NEW_SEDIMENT_50 = SED_YEAR * T_LIFE;
-export const WIND_V = 12;
-export const WIND_D = 15;
-export const SAFETY_1 = 0.7;
-export const SAFETY_2 = 0.5;
+export let WIND_V = 12;
+export let WIND_D = 15;
+export let SAFETY_1 = 0.7;
+export let SAFETY_2 = 0.5;
+
+/**
+ * 批量赋值入口 (供 useDataset 写回使用)
+ * ─────────────────────────────────────────────────────────
+ * 在 ESM 模式下, 外部模块无法直接对 `let` 导出做赋值 (TypeScript
+ * "Cannot assign to import" + 运行时 ESM live binding 也不支持).
+ * 这里提供单一函数, 在本模块内部完成赋值, 外部只需调用 setScalars().
+ * 然后所有 `import { Q_SAFE }` 的下游会通过 ESM live binding 看到新值.
+ */
+export function setScalars(s: {
+  Q_SAFE?: number;
+  R0?: number;
+  T_BUILD?: number;
+  T_RUN?: number;
+  T_FIRE?: number;
+  T_LIFE?: number;
+  H_ECON?: number;
+  P_FLOOD_DOWN?: number;
+  P_DESIGN?: number;
+  P_CHECK?: number;
+  P_GEN?: number;
+  IRRIG_Q?: number;
+  LOCK_Q?: number;
+  SED_YEAR?: number;
+  WIND_V?: number;
+  WIND_D?: number;
+  SAFETY_1?: number;
+  SAFETY_2?: number;
+  FIRE_KWH_COST?: number;
+  MINE_KWH_COST?: number;
+  FIRE_FUEL_COST?: number;
+  FIRE_OP_FACTOR?: number;
+  FIRE_SCALE_CAP?: number;
+  FIRE_SCALE_E?: number;
+}): void {
+  if (s.Q_SAFE !== undefined) Q_SAFE = s.Q_SAFE;
+  if (s.R0 !== undefined) R0 = s.R0;
+  if (s.T_BUILD !== undefined) T_BUILD = s.T_BUILD;
+  if (s.T_RUN !== undefined) T_RUN = s.T_RUN;
+  if (s.T_FIRE !== undefined) T_FIRE = s.T_FIRE;
+  if (s.T_LIFE !== undefined) T_LIFE = s.T_LIFE;
+  if (s.H_ECON !== undefined) H_ECON = s.H_ECON;
+  if (s.P_FLOOD_DOWN !== undefined) P_FLOOD_DOWN = s.P_FLOOD_DOWN;
+  if (s.P_DESIGN !== undefined) P_DESIGN = s.P_DESIGN;
+  if (s.P_CHECK !== undefined) P_CHECK = s.P_CHECK;
+  if (s.P_GEN !== undefined) P_GEN = s.P_GEN;
+  if (s.IRRIG_Q !== undefined) IRRIG_Q = s.IRRIG_Q;
+  if (s.LOCK_Q !== undefined) LOCK_Q = s.LOCK_Q;
+  if (s.SED_YEAR !== undefined) SED_YEAR = s.SED_YEAR;
+  if (s.WIND_V !== undefined) WIND_V = s.WIND_V;
+  if (s.WIND_D !== undefined) WIND_D = s.WIND_D;
+  if (s.SAFETY_1 !== undefined) SAFETY_1 = s.SAFETY_1;
+  if (s.SAFETY_2 !== undefined) SAFETY_2 = s.SAFETY_2;
+  if (s.FIRE_KWH_COST !== undefined) FIRE_KWH_COST = s.FIRE_KWH_COST;
+  if (s.MINE_KWH_COST !== undefined) MINE_KWH_COST = s.MINE_KWH_COST;
+  if (s.FIRE_FUEL_COST !== undefined) FIRE_FUEL_COST = s.FIRE_FUEL_COST;
+  if (s.FIRE_OP_FACTOR !== undefined) FIRE_OP_FACTOR = s.FIRE_OP_FACTOR;
+  if (s.FIRE_SCALE_CAP !== undefined) FIRE_SCALE_CAP = s.FIRE_SCALE_CAP;
+  if (s.FIRE_SCALE_E !== undefined) FIRE_SCALE_E = s.FIRE_SCALE_E;
+}
 
 // ============================================================
 // 6. 出力计算与单位换算常量
@@ -315,10 +402,12 @@ export function get_new_series(): { years: number[]; Q_series: number[][] } {
   return { years, Q_series };
 }
 
-// 多年平均流量 (缓存)
+// 多年平均流量 (缓存) — 缓存键与 YEARS.length 绑定, 径流改写后自动失效
 let _Q_AVG_MS: number | null = null;
+let _Q_AVG_KEY = -1;
 export function get_Q_AVG_MS(): number {
-  if (_Q_AVG_MS === null) {
+  // YEARS 长度变化 (用户改写径流) → 重新计算
+  if (_Q_AVG_MS === null || _Q_AVG_KEY !== YEARS.length) {
     const { Q_series } = get_new_series();
     let sum = 0;
     let count = 0;
@@ -326,6 +415,7 @@ export function get_Q_AVG_MS(): number {
       for (const v of row) { sum += v; count++; }
     }
     _Q_AVG_MS = sum / count;
+    _Q_AVG_KEY = YEARS.length;
   }
   return _Q_AVG_MS;
 }
@@ -444,3 +534,30 @@ export const FLOOD_DATA: Record<string, number[]> = {
   "P=0.1% (1000年)": FLOOD_1000Y,
   "P=0.01% (10000年)": FLOOD_10000Y,
 };
+
+/**
+ * 批量写回 FLOOD_DATA (供 useDataset 编辑洪水过程后调用)
+ * 与 setScalars / setRunoff 同样的设计: 在本模块内完成赋值.
+ */
+export function setFloods(floods: Record<string, number[]>): void {
+  for (const k of Object.keys(FLOOD_DATA)) delete FLOOD_DATA[k];
+  for (const k of Object.keys(floods)) {
+    FLOOD_DATA[k] = [...floods[k]];
+  }
+}
+
+/**
+ * 写回 Z-V 曲线 (水位-库容关系)
+ */
+export function setZvTable(rows: [number, number, number][]): void {
+  Z_V_TABLE.length = 0;
+  for (const row of rows) Z_V_TABLE.push([row[0], row[1], row[2]]);
+}
+
+/**
+ * 写回 Z-Q 曲线 (下游水位-流量关系)
+ */
+export function setZqTable(rows: [number, number][]): void {
+  Z_Q_TABLE.length = 0;
+  for (const row of rows) Z_Q_TABLE.push([row[0], row[1]]);
+}

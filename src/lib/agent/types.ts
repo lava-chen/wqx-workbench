@@ -88,6 +88,35 @@ export interface EvidenceRef {
   relevance: number;
 }
 
+/** OpenAI 兼容 tool_call 描述 (LLM 返回的) */
+export interface ToolCallRequest {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/** 工具调用执行轨迹 (回传给前端展示) */
+export interface ToolTraceEntry {
+  round: number;
+  name: string;
+  args: string;
+  ok: boolean;
+  resultPreview: string;
+  error?: string;
+}
+
+/** OpenAI 兼容 chat message (用于 llm.ts 内部循环) */
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ToolCallRequest[];
+  tool_call_id?: string;
+  name?: string;
+}
+
 export type QuestionKind =
   | "greeting"
   | "checklist"
@@ -123,9 +152,11 @@ export interface AgentResponse {
   answer: string;
   sources: SourceRef[];
   evidence?: EvidenceRef[];
+  toolTrace?: ToolTraceEntry[];
   debug?: {
     questionKind: QuestionKind;
     contextTokens: number;
     model?: string;
+    toolRounds?: number;
   };
 }

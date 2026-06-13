@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   Database,
@@ -111,18 +111,13 @@ import {
   downloadJson,
   type ScalarKey,
 } from "@/hooks/useDataset";
+import { useSchemePalette } from "@/hooks/useSchemePalette";
 
 // ============================================================
 // 常量
 // ============================================================
 
-const SCHEME_KEYS = ["I", "II", "III", "IV"] as const;
-const SCHEME_LABELS: Record<string, string> = {
-  I: "方案 I",
-  II: "方案 II",
-  III: "方案 III",
-  IV: "方案 IV",
-};
+// 方案列表与配色从 useSchemePalette 动态获取
 const MONTH_NAMES = ["4", "5", "6", "7", "8", "9", "10", "11", "12", "1", "2", "3"];
 
 const FLOOD_KEYS = [
@@ -204,6 +199,7 @@ interface StatDef {
 
 function OverviewTab() {
   const { data, isHydrated, setScalar } = useDataset();
+  const { schemes: SCHEME_KEYS } = useSchemePalette();
 
   const stats: StatDef[] = useMemo(() => {
     const qavg = get_Q_AVG_MS();
@@ -349,7 +345,7 @@ function OverviewTab() {
         <span>Z-V 曲线 <b style={{ color: "var(--text)" }}>{Z_V_TABLE.length}</b> 个控制点</span>
         <span>Z-Q 曲线 <b style={{ color: "var(--text)" }}>{Z_Q_TABLE.length}</b> 个控制点</span>
         <span>设计洪水 <b style={{ color: "var(--text)" }}>3</b> 场</span>
-        <span>比较方案 <b style={{ color: "var(--text)" }}>4</b> 个</span>
+        <span>比较方案 <b style={{ color: "var(--text)" }}>{SCHEME_KEYS.length}</b> 个</span>
       </div>
     </div>
   );
@@ -360,10 +356,14 @@ function OverviewTab() {
 // ============================================================
 
 function RunoffTab() {
+  const { data, setRunoff } = useDataset();
+  // data.raw_monthly / data.years 与 engine 同步, 实时反映编辑结果
+  const years = data.years;
+  const raw = data.raw_monthly;
   // 展开为行: { year, m1..m12, annual_avg, annual_total_yi }
   const rows = useMemo(() => {
-    return YEARS.map((y, i) => {
-      const row = RAW_MONTHLY[i];
+    return years.map((y, i) => {
+      const row = raw[i] ?? [];
       const sum = row.reduce((a, b) => a + b, 0);
       const avg = sum / 12;
       const annual_yi = (avg * 30.4 * 86400 * 12) / 1e8;
@@ -374,15 +374,10 @@ function RunoffTab() {
         annual_yi,
       };
     });
-  }, []);
-
-  const monthMatrix = useMemo(() => {
-    // shape: [year_idx][month_idx] -> value
-    return rows.map((r) => r.months);
-  }, [rows]);
+  }, [years, raw]);
 
   // 颜色归一化的 max/min
-  const allValues = RAW_MONTHLY.flat();
+  const allValues = raw.flat();
   const vMin = Math.min(...allValues);
   const vMax = Math.max(...allValues);
 
@@ -390,10 +385,10 @@ function RunoffTab() {
   const monthAvg = useMemo(() => {
     return Array.from({ length: 12 }, (_, k) => {
       let sum = 0;
-      for (let i = 0; i < RAW_MONTHLY.length; i++) sum += RAW_MONTHLY[i][k];
-      return sum / RAW_MONTHLY.length;
+      for (let i = 0; i < raw.length; i++) sum += raw[i][k] ?? 0;
+      return sum / raw.length;
     });
-  }, []);
+  }, [raw]);
 
   const annualAvgData = useMemo(
     () =>
@@ -405,6 +400,44 @@ function RunoffTab() {
     [rows]
   );
 
+  // 双击编辑某年某月的流量值
+  function editCell(yearIdx: number, monthIdx: number, v: number) {
+    if (v < 0) return;
+    const next = raw.map((row) => [...row]);
+    next[yearIdx] = [...next[yearIdx]];
+    next[yearIdx][monthIdx] = v;
+    setRunoff(years, next);
+  }
+
+  // 单元格 ref 表: 用于方向键在 12 个月间跳格
+  const cellRefs = useRef<Array<Array<HTMLDivElement | null>>>([]);
+  // 每次重渲染同步 ref 数组长度
+  if (cellRefs.current.length !== rows.length) {
+    cellRefs.current = Array.from({ length: rows.length }, () =>
+      Array.from({ length: 12 }, () => null),
+    );
+  }
+
+  // 方向键跳格信号: 父组件递增时, 该位置的 RunoffCell 重新进入编辑
+  const [focusSignal, setFocusSignal] = useState<{
+    y: number;
+    m: number;
+    n: number;
+  }>({ y: -1, m: -1, n: 0 });
+
+  function handleArrow(yearIdx: number, monthIdx: number, dir: -1 | 1) {
+    const m = monthIdx + dir;
+    if (m < 0 || m > 11) return; // 边界: 留在原行, 父级会自然 commit
+    setFocusSignal({ y: yearIdx, m, n: focusSignal.n + 1 });
+  }
+
+  // 双击编辑年份
+  function editYear(yearIdx: number, v: number) {
+    const next = [...years];
+    next[yearIdx] = Math.round(v);
+    setRunoff(next, raw);
+  }
+
   return (
     <div className="space-y-6">
       <SectionHeader
@@ -413,7 +446,7 @@ function RunoffTab() {
         description="1950/4 ~ 1981/3 共 31 个水文年的月平均流量, 顺序为 4 月起、次年 3 月止。"
         icon={Droplets}
       />
-      <DataTableHint name="径流" rows={RAW_MONTHLY.length} cols={12} schemaPath="raw_monthly" />
+      <DataTableHint name="径流" rows={raw.length} cols={12} schemaPath="raw_monthly" />
 
       {/* 摘要指标 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -482,17 +515,20 @@ function RunoffTab() {
                   {r.months.map((v, k) => {
                     const t = (v - vMin) / (vMax - vMin || 1);
                     return (
-                      <div
+                      <RunoffCell
                         key={k}
+                        v={v}
+                        t={t}
+                        vMax={vMax}
                         title={`${r.year} 年 ${MONTH_NAMES[k]} 月: ${fmtInt(v)} m³/s`}
-                        className="h-7 rounded-sm flex items-center justify-center text-[10px] font-mono tabular-nums cursor-default transition-transform hover:scale-110 hover:z-10"
-                        style={{
-                          backgroundColor: heatColor(t),
-                          color: textColor(t),
-                        }}
-                      >
-                        {v > vMax * 0.6 ? fmtInt(v) : ""}
-                      </div>
+                        onCommit={(nv) => editCell(i, k, nv)}
+                        onArrow={(dir) => handleArrow(i, k, dir)}
+                        autoFocus={
+                          focusSignal.y === i && focusSignal.m === k
+                            ? focusSignal
+                            : undefined
+                        }
+                      />
                     );
                   })}
                   <div
@@ -693,8 +729,18 @@ function RunoffTab() {
                     {r.months.map((v, k) => (
                       <td
                         key={k}
-                        className="px-2 py-1 text-right"
+                        className="px-1 py-0.5 text-right cursor-text"
                         style={{ color: "var(--text)" }}
+                        onClick={() => {
+                          const newVal = window.prompt(
+                            `${r.year} 年 ${MONTH_NAMES[k]} 月流量 (m³/s)`,
+                            String(v)
+                          );
+                          if (newVal == null) return;
+                          const n = Number(newVal);
+                          if (Number.isFinite(n) && n >= 0) editCell(i, k, n);
+                        }}
+                        title="单击编辑"
                       >
                         {fmtInt(v)}
                       </td>
@@ -733,14 +779,33 @@ function RunoffTab() {
 // ============================================================
 
 function CurvesTab() {
+  const { schemes: SCHEME_KEYS, colorById: COLORS } = useSchemePalette();
+  const { data, setZv, setZq } = useDataset();
+  // 用 useDataset 的数据, 实时反映用户编辑
+  const zv = data.zv;
+  const zq = data.zq;
   const zvData = useMemo(
-    () => Z_V_TABLE.map(([z, v, msm]) => ({ Z: z, V: v, MSM: msm })),
-    []
+    () => zv.map(([z, v, msm]) => ({ Z: z, V: v, MSM: msm })),
+    [zv]
   );
   const zqData = useMemo(
-    () => Z_Q_TABLE.map(([z, q]) => ({ Z: z, Q: q })),
-    []
+    () => zq.map(([z, q]) => ({ Z: z, Q: q })),
+    [zq]
   );
+
+  function editZvRow(i: number, col: 0 | 1 | 2, v: number) {
+    const next = zv.map((r) => [r[0], r[1], r[2]] as [number, number, number]);
+    next[i] = [next[i][0], next[i][1], next[i][2]];
+    next[i][col] = v;
+    setZv(next);
+  }
+
+  function editZqRow(i: number, col: 0 | 1, v: number) {
+    const next = zq.map((r) => [r[0], r[1]] as [number, number]);
+    next[i] = [next[i][0], next[i][1]];
+    next[i][col] = v;
+    setZq(next);
+  }
 
   return (
     <div className="space-y-6">
@@ -765,8 +830,8 @@ function CurvesTab() {
               水位-库容曲线 (Z-V)
             </CardTitle>
             <CardDescription>
-              {Z_V_TABLE.length} 个控制点 · 单位 亿m³ / m³·s·月
-            </CardDescription>
+                  {zv.length} 个控制点 · 单位 亿m³ / m³·s·月
+                </CardDescription>
           </CardHeader>
           <CardContent className="h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -843,16 +908,14 @@ function CurvesTab() {
                   <ReferenceLine
                     key={sk}
                     yAxisId="left"
-                    x={SCHEMES[sk].Z_zheng}
-                    stroke={["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"][
-                      SCHEME_KEYS.indexOf(sk as any)
-                    ]}
+                    x={SCHEMES[sk]?.Z_zheng ?? 100}
+                    stroke={COLORS[sk] ?? "#1f77b4"}
                     strokeDasharray="4 4"
                     label={{
-                      value: `方案${sk}: ${SCHEMES[sk].Z_zheng}m`,
+                      value: `方案${sk}: ${SCHEMES[sk]?.Z_zheng ?? "—"}m`,
                       position: "top",
                       fontSize: 9,
-                      fill: "var(--muted)",
+                      fill: COLORS[sk] ?? "#1f77b4",
                     }}
                   />
                 ))}
@@ -869,7 +932,7 @@ function CurvesTab() {
               下游水位-流量曲线 (Z-q)
             </CardTitle>
             <CardDescription>
-              {Z_Q_TABLE.length} 个控制点 · 用于调洪演算中由 Q 反查下游水位
+              {zq.length} 个控制点 · 用于调洪演算中由 Q 反查下游水位
             </CardDescription>
           </CardHeader>
           <CardContent className="h-[320px]">
@@ -975,21 +1038,36 @@ function CurvesTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Z_V_TABLE.map(([z, v, msm], i) => (
+                  {zv.map((row, i) => (
                     <tr
                       key={i}
                       className="border-t"
                       style={{ borderColor: "var(--border)" }}
                     >
-                      <td className="px-3 py-1 font-semibold" style={{ color: "var(--text)" }}>
-                        {z}
-                      </td>
-                      <td className="px-3 py-1 text-right" style={{ color: "var(--accent-color)" }}>
-                        {fmt(v, 3)}
-                      </td>
-                      <td className="px-3 py-1 text-right" style={{ color: "var(--muted)" }}>
-                        {fmt(msm, 2)}
-                      </td>
+                      <NumCell
+                        className="px-3 py-1 font-semibold"
+                        style={{ color: "var(--text)" }}
+                        value={row[0]}
+                        onCommit={(v) => editZvRow(i, 0, v)}
+                        step={0.5}
+                        digits={1}
+                      />
+                      <NumCell
+                        className="px-3 py-1"
+                        style={{ color: "var(--accent-color)" }}
+                        value={row[1]}
+                        onCommit={(v) => editZvRow(i, 1, v)}
+                        step={0.01}
+                        digits={3}
+                      />
+                      <NumCell
+                        className="px-3 py-1"
+                        style={{ color: "var(--muted)" }}
+                        value={row[2]}
+                        onCommit={(v) => editZvRow(i, 2, v)}
+                        step={0.1}
+                        digits={2}
+                      />
                     </tr>
                   ))}
                 </tbody>
@@ -1028,18 +1106,27 @@ function CurvesTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Z_Q_TABLE.map(([z, q], i) => (
+                  {zq.map((row, i) => (
                     <tr
                       key={i}
                       className="border-t"
                       style={{ borderColor: "var(--border)" }}
                     >
-                      <td className="px-3 py-1 font-semibold" style={{ color: "var(--text)" }}>
-                        {fmt(z, 1)}
-                      </td>
-                      <td className="px-3 py-1 text-right" style={{ color: "#22c55e" }}>
-                        {fmtInt(q)}
-                      </td>
+                      <NumCell
+                        className="px-3 py-1 font-semibold"
+                        style={{ color: "var(--text)" }}
+                        value={row[0]}
+                        onCommit={(v) => editZqRow(i, 0, v)}
+                        step={50}
+                      />
+                      <NumCell
+                        className="px-3 py-1"
+                        style={{ color: "#22c55e" }}
+                        value={row[1]}
+                        onCommit={(v) => editZqRow(i, 1, v)}
+                        step={0.1}
+                        digits={1}
+                      />
                     </tr>
                   ))}
                 </tbody>
@@ -1057,13 +1144,13 @@ function CurvesTab() {
 // ============================================================
 
 function SchemeTab() {
-  const SCHEME_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"];
+  const { schemes: SCHEME_KEYS, colorById: COLORS, labelById: SCHEME_LABELS } = useSchemePalette();
 
   // 投资对比
   const investData = useMemo(
     () =>
-      SCHEME_KEYS.map((sk, i) => ({
-        scheme: SCHEME_LABELS[sk],
+      SCHEME_KEYS.filter((sk) => ECON[sk]).map((sk) => ({
+        scheme: SCHEME_LABELS[sk] ?? sk,
         大坝: ECON[sk].dam_invest,
         机电: ECON[sk].mech_invest,
         临时: ECON[sk].temp_invest,
@@ -1071,7 +1158,7 @@ function SchemeTab() {
         合计: ECON[sk].dam_invest + ECON[sk].mech_invest + ECON[sk].temp_invest + ECON[sk].comp_invest,
         _key: sk,
       })),
-    []
+    [SCHEME_KEYS, SCHEME_LABELS]
   );
 
   // 投资分年比例
@@ -1080,85 +1167,103 @@ function SchemeTab() {
       Array.from({ length: 11 }, (_, i) => {
         const obj: any = { year: i + 1 };
         for (const sk of SCHEME_KEYS) {
-          obj[sk] = INVEST_RATIO[sk][i] || 0;
+          obj[sk] = INVEST_RATIO[sk]?.[i] ?? 0;
         }
         return obj;
       }),
-    []
+    [SCHEME_KEYS]
   );
 
   return (
     <div className="space-y-6">
       <SectionHeader
         eyebrow="04 / Scheme Configuration"
-        title="4 个方案设计参数"
-        description="正常蓄水位、泄洪建筑、经济指标等 4 方案核心配置。"
+        title={`${SCHEME_KEYS.length} 个方案设计参数`}
+        description="正常蓄水位、泄洪建筑、经济指标等方案核心配置。"
         icon={Building2}
       />
 
       {/* 方案核心参数 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        {SCHEME_KEYS.map((sk, i) => (
-          <div
-            key={sk}
-            className="feature-card rounded-xl p-4"
-            style={{
-              backgroundColor: "var(--bg-canvas)",
-              border: `1px solid ${SCHEME_COLORS[i]}40`,
-            }}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <Badge
-                className="font-mono"
-                style={{
-                  backgroundColor: SCHEME_COLORS[i],
-                  color: "white",
-                }}
-              >
-                方案 {sk}
-              </Badge>
-              <div
-                className="text-[10px] font-mono uppercase tracking-widest"
-                style={{ color: "var(--muted)" }}
-              >
-                Z正 = {SCHEMES[sk].Z_zheng} m
+      <div
+        className="grid gap-3"
+        style={{
+          gridTemplateColumns: `repeat(${Math.min(SCHEME_KEYS.length, 4)}, minmax(0, 1fr))`,
+        }}
+      >
+        {SCHEME_KEYS.filter((sk) => SCHEMES[sk]).map((sk) => {
+          const c = COLORS[sk] ?? "#888";
+          return (
+            <div
+              key={sk}
+              className="feature-card rounded-xl p-4"
+              style={{
+                backgroundColor: "var(--bg-canvas)",
+                border: `1px solid ${c}40`,
+              }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <Badge
+                  className="font-mono"
+                  style={{
+                    backgroundColor: c,
+                    color: "white",
+                  }}
+                >
+                  方案 {sk}
+                </Badge>
+                <div
+                  className="text-[10px] font-mono uppercase tracking-widest"
+                  style={{ color: "var(--muted)" }}
+                >
+                  Z正 = {SCHEMES[sk].Z_zheng} m
+                </div>
+              </div>
+              <div className="space-y-1.5 text-xs font-mono">
+                <KV label="正常蓄水位" value={`${SCHEMES[sk].Z_zheng} m`} accent />
+                <KV label="最大坝高" value={`${SCHEMES[sk].H_dam_max} m`} />
+                {SPILLWAY[sk] && (
+                  <>
+                    <KV
+                      label="溢流坝"
+                      value={`${SPILLWAY[sk].spill_n} 孔 × ${SPILLWAY[sk].spill_b}m`}
+                    />
+                    <KV
+                      label="溢流坝顶"
+                      value={`${SPILLWAY[sk].spill_crest} m`}
+                    />
+                    {SPILLWAY[sk].mid_n > 0 && (
+                      <KV
+                        label="中孔"
+                        value={`${SPILLWAY[sk].mid_n} 孔 × ${SPILLWAY[sk].mid_b}×${SPILLWAY[sk].mid_h}m`}
+                      />
+                    )}
+                  </>
+                )}
+                {ECON[sk] && (
+                  <KV
+                    label="装机"
+                    value={`${ECON[sk].install_cap} 万 kW`}
+                  />
+                )}
+                {RESERVE[sk] != null && (
+                  <KV label="备用容量" value={`${RESERVE[sk]} 万 kW`} />
+                )}
+                {RUN_FACTOR[sk] != null && (
+                  <KV
+                    label="运行费率"
+                    value={`${RUN_FACTOR[sk]}%`}
+                  />
+                )}
+                {FENGTAN_LOSS[sk] && FENGTAN_LOSS[sk].N > 0 && (
+                  <KV
+                    label="丰潭损失"
+                    value={`N:${FENGTAN_LOSS[sk].N} E:${FENGTAN_LOSS[sk].E}`}
+                  />
+                )}
               </div>
             </div>
-            <div className="space-y-1.5 text-xs font-mono">
-              <KV label="正常蓄水位" value={`${SCHEMES[sk].Z_zheng} m`} accent />
-              <KV label="最大坝高" value={`${SCHEMES[sk].H_dam_max} m`} />
-              <KV
-                label="溢流坝"
-                value={`${SPILLWAY[sk].spill_n} 孔 × ${SPILLWAY[sk].spill_b}m`}
-              />
-              <KV
-                label="溢流坝顶"
-                value={`${SPILLWAY[sk].spill_crest} m`}
-              />
-              {SPILLWAY[sk].mid_n > 0 && (
-                <KV
-                  label="中孔"
-                  value={`${SPILLWAY[sk].mid_n} 孔 × ${SPILLWAY[sk].mid_b}×${SPILLWAY[sk].mid_h}m`}
-                />
-              )}
-              <KV
-                label="装机"
-                value={`${ECON[sk].install_cap} 万 kW`}
-              />
-              <KV label="备用容量" value={`${RESERVE[sk]} 万 kW`} />
-              <KV
-                label="运行费率"
-                value={`${RUN_FACTOR[sk]}%`}
-              />
-              {FENGTAN_LOSS[sk].N > 0 && (
-                <KV
-                  label="丰潭损失"
-                  value={`N:${FENGTAN_LOSS[sk].N} E:${FENGTAN_LOSS[sk].E}`}
-                />
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* 投资对比 */}
@@ -1245,12 +1350,12 @@ function SchemeTab() {
                 formatter={(v: any) => `${(Number(v) * 100).toFixed(1)}%`}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              {SCHEME_KEYS.map((sk, i) => (
+              {SCHEME_KEYS.map((sk) => (
                 <Line
                   key={sk}
                   type="monotone"
                   dataKey={sk}
-                  stroke={SCHEME_COLORS[i]}
+                  stroke={COLORS[sk] ?? "#888"}
                   strokeWidth={2}
                   dot={{ r: 3 }}
                   name={`方案 ${sk}`}
@@ -1280,79 +1385,82 @@ function SchemeTab() {
                   >
                     指标
                   </th>
-                  {SCHEME_KEYS.map((sk, i) => (
-                    <th
-                      key={sk}
-                      className="px-3 py-2 text-right"
-                      style={{
-                        backgroundColor: `${SCHEME_COLORS[i]}15`,
-                        color: SCHEME_COLORS[i],
-                      }}
-                    >
-                      方案 {sk}
-                    </th>
-                  ))}
+                  {SCHEME_KEYS.map((sk) => {
+                    const c = COLORS[sk] ?? "#888";
+                    return (
+                      <th
+                        key={sk}
+                        className="px-3 py-2 text-right"
+                        style={{
+                          backgroundColor: `${c}15`,
+                          color: c,
+                        }}
+                      >
+                        方案 {sk}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 <Row label="大坝投资 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(ECON[sk].dam_invest)}</Td>
+                    <Td key={sk}>{ECON[sk] ? fmtInt(ECON[sk].dam_invest) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="机电投资 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(ECON[sk].mech_invest)}</Td>
+                    <Td key={sk}>{ECON[sk] ? fmtInt(ECON[sk].mech_invest) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="临时工程 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(ECON[sk].temp_invest)}</Td>
+                    <Td key={sk}>{ECON[sk] ? fmtInt(ECON[sk].temp_invest) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="补偿投资 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(ECON[sk].comp_invest)}</Td>
+                    <Td key={sk}>{ECON[sk] ? fmtInt(ECON[sk].comp_invest) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="水工建筑 (万元)" highlight>
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(HYDRAULIC_BUILD[sk].cost)}</Td>
+                    <Td key={sk}>{HYDRAULIC_BUILD[sk] ? fmtInt(HYDRAULIC_BUILD[sk].cost) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="水工修理 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmt(HYDRAULIC_BUILD[sk].overhaul, 1)}</Td>
+                    <Td key={sk}>{HYDRAULIC_BUILD[sk] ? fmt(HYDRAULIC_BUILD[sk].overhaul, 1) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="机电安装 (万kW)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{MECH[sk].install}</Td>
+                    <Td key={sk}>{MECH[sk]?.install ?? "—"}</Td>
                   ))}
                 </Row>
                 <Row label="机电成本 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(MECH[sk].cost)}</Td>
+                    <Td key={sk}>{MECH[sk] ? fmtInt(MECH[sk].cost) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="机电修理 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmt(MECH[sk].overhaul, 1)}</Td>
+                    <Td key={sk}>{MECH[sk] ? fmt(MECH[sk].overhaul, 1) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="房屋交通 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(HOUSE_TRAFFIC[sk].cost)}</Td>
+                    <Td key={sk}>{HOUSE_TRAFFIC[sk] ? fmtInt(HOUSE_TRAFFIC[sk].cost) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="补偿原值 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmtInt(COMPENSATION[sk].value)}</Td>
+                    <Td key={sk}>{COMPENSATION[sk] ? fmtInt(COMPENSATION[sk].value) : "—"}</Td>
                   ))}
                 </Row>
                 <Row label="年补偿费 (万元)">
                   {SCHEME_KEYS.map((sk) => (
-                    <Td key={sk}>{fmt(COMPENSATION[sk].deduct, 1)}</Td>
+                    <Td key={sk}>{COMPENSATION[sk] ? fmt(COMPENSATION[sk].deduct, 1) : "—"}</Td>
                   ))}
                 </Row>
               </tbody>
@@ -1369,33 +1477,43 @@ function SchemeTab() {
 // ============================================================
 
 function FloodTab() {
+  const { data, setFlood } = useDataset();
+  const floods = data.floods;
   const floodData = useMemo(() => {
-    // 取最长的 10000 年 (88 时刻) 作为 x 轴
-    const len = FLOOD_DATA["P=0.01% (10000年)"].length;
-    return Array.from({ length: len }, (_, i) => {
+    // 取最长的 10000 年作为 x 轴
+    const maxLen = Math.max(...Object.values(floods).map((a) => a.length), 0);
+    return Array.from({ length: maxLen }, (_, i) => {
       const obj: any = { t: i + 1 };
       for (const key of FLOOD_KEYS) {
-        obj[key] = FLOOD_DATA[key][i] ?? null;
+        obj[key] = floods[key]?.[i] ?? null;
       }
       return obj;
     });
-  }, []);
+  }, [floods]);
 
   // 洪峰统计
   const floodStats = useMemo(
     () =>
       FLOOD_KEYS.map((key) => {
-        const arr = FLOOD_DATA[key];
+        const arr = floods[key] ?? [];
         return {
           key,
-          Qmax: Math.max(...arr),
-          峰现时刻: arr.indexOf(Math.max(...arr)) + 1,
+          Qmax: arr.length ? Math.max(...arr) : 0,
+          峰现时刻: arr.length ? arr.indexOf(Math.max(...arr)) + 1 : 0,
           历时: arr.length,
-          均值: arr.reduce((a, b) => a + b, 0) / arr.length,
+          均值: arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0,
         };
       }),
-    []
+    [floods]
   );
+
+  function editFloodCell(floodKey: string, idx: number, v: number) {
+    if (v < 0) return;
+    const cur = floods[floodKey] ?? [];
+    const next = [...cur];
+    next[idx] = v;
+    setFlood(floodKey, next);
+  }
 
   return (
     <div className="space-y-6">
@@ -1407,7 +1525,7 @@ function FloodTab() {
       />
       <DataTableHint
         name="洪水过程线"
-        rows={Math.max(...FLOOD_KEYS.map((k) => FLOOD_DATA[k].length))}
+        rows={Math.max(...FLOOD_KEYS.map((k) => floods[k]?.length ?? 0))}
         schemaPath="floods"
       />
 
@@ -1601,13 +1719,14 @@ function FloodTab() {
                       {d.t}
                     </td>
                     {FLOOD_KEYS.map((k) => (
-                      <td
+                      <NumCell
                         key={k}
-                        className="px-3 py-0.5 text-right"
+                        className="px-3 py-0.5"
                         style={{ color: FLOOD_COLORS[k] }}
-                      >
-                        {d[k] != null ? fmtInt(d[k]) : "—"}
-                      </td>
+                        value={d[k] ?? 0}
+                        onCommit={(v) => editFloodCell(k, d.t - 1, v)}
+                        step={50}
+                      />
                     ))}
                   </tr>
                 ))}
@@ -1625,6 +1744,17 @@ function FloodTab() {
 // ============================================================
 
 function EconomicTab() {
+  const { schemes: SCHEME_KEYS, colorById: COLORS } = useSchemePalette();
+  // 注: INVEST_RATIO 由 useSchemes 维护, 这里编辑会立即写回 engine,
+  // 但下次方案变更时 useSchemes.applyToEngine 会用 ENGINE_SNAPSHOT 复位.
+  // 完整方案是把它纳入 useSchemes 的 SchemeData 字段, 待后续扩展.
+  function editInvestRatio(sk: string, idx: number, v: number) {
+    if (v < 0) return;
+    const cur = (INVEST_RATIO as Record<string, number[]>)[sk];
+    if (!cur) return;
+    (INVEST_RATIO as Record<string, number[]>)[sk] = [...cur];
+    (INVEST_RATIO as Record<string, number[]>)[sk][idx] = v;
+  }
   return (
     <div className="space-y-6">
       <SectionHeader
@@ -1679,7 +1809,7 @@ function EconomicTab() {
             <div className="space-y-2 font-mono text-xs">
               <div>
                 <div className="font-semibold mb-1" style={{ color: "var(--muted)" }}>
-                  4 方案分年
+                  {SCHEME_KEYS.length} 方案分年
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -1688,7 +1818,7 @@ function EconomicTab() {
                         <th className="px-1 py-1 text-left" style={{ color: "var(--muted)" }}>
                           方案
                         </th>
-                        {INVEST_RATIO.I.map((_, i) => (
+                        {INVEST_RATIO["I"]?.map((_, i) => (
                           <th
                             key={i}
                             className="px-1 py-1 text-right"
@@ -1700,25 +1830,33 @@ function EconomicTab() {
                       </tr>
                     </thead>
                     <tbody>
-                      {SCHEME_KEYS.map((sk) => (
-                        <tr key={sk}>
-                          <td
-                            className="px-1 py-0.5 font-semibold"
-                            style={{ color: "var(--text)" }}
-                          >
-                            {sk}
-                          </td>
-                          {INVEST_RATIO[sk].map((r, i) => (
+                      {SCHEME_KEYS.map((sk) => {
+                        const c = COLORS[sk] ?? "#888";
+                        const ratios = INVEST_RATIO[sk] ?? [];
+                        return (
+                          <tr key={sk}>
                             <td
-                              key={i}
-                              className="px-1 py-0.5 text-right"
-                              style={{ color: "var(--text)" }}
+                              className="px-1 py-0.5 font-semibold"
+                              style={{ color: c }}
                             >
-                              {(r * 100).toFixed(1)}%
+                              {sk}
                             </td>
-                          ))}
-                        </tr>
-                      ))}
+                            {ratios.map((r, i) => (
+                              <NumCell
+                                key={i}
+                                className="px-1 py-0.5"
+                                style={{ color: "var(--text)" }}
+                                value={r}
+                                onCommit={(v) => editInvestRatio(sk, i, v)}
+                                step={0.01}
+                                min={0}
+                                max={1}
+                                digits={3}
+                              />
+                            ))}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -2028,6 +2166,241 @@ function ScalarInput({
 }
 
 // ============================================================
+// 单元格内联编辑
+// ─────────────────────────────────────────────────────────
+// 用于径流 / Z-V / Z-Q / 洪水 / 投资分年 等二维数据.
+// 鼠标双击或单击进入编辑, 失焦 / Enter commit, Esc 取消.
+// 编辑后写回 useDataset → engine → 自动重算.
+// ============================================================
+
+/**
+ * 径流热图单元格: 颜色按流量归一化, 单击进入 inline 编辑.
+ * 编辑态下方向键 ← → 在 12 个月间跳格 (用于连续编辑多月).
+ */
+function RunoffCell({
+  v,
+  t,
+  vMax,
+  title,
+  onCommit,
+  onArrow,
+  autoFocus,
+}: {
+  v: number;
+  t: number;
+  vMax: number;
+  title: string;
+  onCommit: (v: number) => void;
+  /** 编辑态下按方向键时通知父级跳到下/上一格 (-1 / +1 月) */
+  onArrow?: (dir: -1 | 1) => void;
+  /** 父级方向键信号, n 变化时重新进入编辑 */
+  autoFocus?: { y: number; m: number; n: number };
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  // 用 ref 跟踪上一次的信号 n, 避免初次挂载就进入编辑
+  const lastSignalRef = useRef(0);
+
+  function startEdit() {
+    setDraft(String(v));
+    setEditing(true);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  }
+
+  // 监听父级方向键信号
+  useEffect(() => {
+    if (!autoFocus) return;
+    if (autoFocus.n > lastSignalRef.current) {
+      lastSignalRef.current = autoFocus.n;
+      startEdit();
+    } else {
+      lastSignalRef.current = autoFocus.n;
+    }
+  }, [autoFocus?.n]);
+
+  function commit() {
+    setEditing(false);
+    const n = Number(draft);
+    if (!Number.isFinite(n) || n < 0) return;
+    if (Math.abs(n - v) > 1e-9) onCommit(n);
+  }
+
+  function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    startEdit();
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+            setDraft("");
+          } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            // 跳格前先尝试 commit 当前值, 再通知父级移动焦点
+            e.preventDefault();
+            const dir: -1 | 1 = e.key === "ArrowLeft" ? -1 : 1;
+            commit();
+            onArrow?.(dir);
+          }
+        }}
+        className="h-7 px-1 text-[10px] font-mono tabular-nums outline-none text-center"
+        style={{
+          backgroundColor: "var(--accent-soft)",
+          color: "var(--accent-color)",
+          border: "1px solid var(--accent-color)",
+          borderRadius: 3,
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      onClick={handleClick}
+      title={title + " · 单击编辑"}
+      className="h-7 rounded-sm flex items-center justify-center text-[10px] font-mono tabular-nums cursor-pointer transition-transform hover:scale-110 hover:z-10"
+      style={{
+        backgroundColor: heatColor(t),
+        color: textColor(t),
+      }}
+    >
+      {v > vMax * 0.6 ? fmtInt(v) : ""}
+    </div>
+  );
+}
+
+function NumCell({
+  value,
+  onCommit,
+  min,
+  max,
+  step,
+  digits = 0,
+  className,
+  style,
+  title,
+  align = "right",
+}: {
+  value: number;
+  onCommit: (v: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  digits?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  title?: string;
+  align?: "left" | "right" | "center";
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startEdit() {
+    setDraft(Number.isFinite(value) ? String(value) : "");
+    setEditing(true);
+    // 等下一帧再 focus, 否则 input 还没挂载
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  }
+
+  function commit() {
+    setEditing(false);
+    if (draft === "") return;
+    const n = Number(draft);
+    if (!Number.isFinite(n)) return;
+    let v = n;
+    if (typeof min === "number" && v < min) v = min;
+    if (typeof max === "number" && v > max) v = max;
+    // 用容差避免浮点抖动
+    if (Math.abs(v - value) > 1e-9) onCommit(v);
+  }
+
+  function cancel() {
+    setEditing(false);
+    setDraft("");
+  }
+
+  const display =
+    Number.isFinite(value)
+      ? digits > 0
+        ? value.toFixed(digits)
+        : Math.round(value).toString()
+      : "—";
+
+  const baseStyle: React.CSSProperties = {
+    textAlign: align,
+    cursor: "text",
+    userSelect: "none",
+    ...style,
+  };
+
+  if (editing) {
+    return (
+      <td className={className} style={style} title={title}>
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="decimal"
+          step={step}
+          min={min}
+          max={max}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          className="w-full px-1.5 py-0.5 text-xs font-mono tabular-nums outline-none"
+          style={{
+            backgroundColor: "var(--accent-soft)",
+            color: "var(--accent-color)",
+            border: "1px solid var(--accent-color)",
+            borderRadius: 3,
+            textAlign: align,
+          }}
+        />
+      </td>
+    );
+  }
+
+  return (
+    <td
+      className={className}
+      style={baseStyle}
+      title={title ?? "双击编辑"}
+      onDoubleClick={startEdit}
+    >
+      {display}
+    </td>
+  );
+}
+
+// ============================================================
 // 二维数据编辑入口提示
 // ============================================================
 
@@ -2069,7 +2442,9 @@ function DataTableHint({
       <span className="ml-auto">
         通过页面顶部的
         <span style={{ color: "var(--accent-color)" }}>「导入 JSON」</span>
-        修改本表 (JSON key: <code style={{ color: "var(--text)" }}>{schemaPath}</code>)
+        /
+        <span style={{ color: "var(--accent-color)" }}>「导入 CSV」</span>
+        修改本表
       </span>
     </div>
   );
@@ -2080,12 +2455,13 @@ function DataTableHint({
 // ============================================================
 
 function ImportExportBar({ compact = false }: { compact?: boolean }) {
-  const { isHydrated, isModified, importJson, exportJson, reset } = useDataset();
+  const { isHydrated, isModified, importJson, importCsv, exportJson, reset } = useDataset();
   const [feedback, setFeedback] = useState<{
     kind: "ok" | "err";
     msg: string;
   } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const jsonRef = useRef<HTMLInputElement>(null);
+  const csvRef = useRef<HTMLInputElement>(null);
 
   if (!isHydrated) return null;
 
@@ -2099,21 +2475,36 @@ function ImportExportBar({ compact = false }: { compact?: boolean }) {
     setFeedback({ kind: "ok", msg: "已下载 JSON 文件" });
   }
 
-  function handleImportClick() {
-    fileRef.current?.click();
+  function handleImportJsonClick() {
+    jsonRef.current?.click();
   }
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleImportCsvClick() {
+    csvRef.current?.click();
+  }
+
+  async function handleFileChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+    kind: "json" | "csv",
+  ) {
     const file = e.target.files?.[0];
     e.target.value = ""; // 允许重复选同一文件
     if (!file) return;
     try {
       const text = await file.text();
-      importJson(text);
-      setFeedback({
-        kind: "ok",
-        msg: `已导入 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
-      });
+      if (kind === "json") {
+        importJson(text);
+        setFeedback({
+          kind: "ok",
+          msg: `已导入 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+        });
+      } else {
+        importCsv(text);
+        setFeedback({
+          kind: "ok",
+          msg: `已导入 ${file.name} → 径流 ${file.name}`,
+        });
+      }
     } catch (err: any) {
       const msg =
         err instanceof DatasetImportError
@@ -2135,14 +2526,21 @@ function ImportExportBar({ compact = false }: { compact?: boolean }) {
     <div className="flex flex-col items-end gap-1.5 shrink-0">
       <div className="flex items-center gap-1.5 flex-wrap justify-end">
         <input
-          ref={fileRef}
+          ref={jsonRef}
           type="file"
           accept="application/json,.json"
-          onChange={handleFileChange}
+          onChange={(e) => handleFileChange(e, "json")}
+          className="hidden"
+        />
+        <input
+          ref={csvRef}
+          type="file"
+          accept="text/csv,.csv,text/plain"
+          onChange={(e) => handleFileChange(e, "csv")}
           className="hidden"
         />
         <button
-          onClick={handleImportClick}
+          onClick={handleImportJsonClick}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors"
           style={{
             backgroundColor: "var(--bg-canvas)",
@@ -2153,6 +2551,19 @@ function ImportExportBar({ compact = false }: { compact?: boolean }) {
         >
           <Upload className="h-3.5 w-3.5" />
           导入 JSON
+        </button>
+        <button
+          onClick={handleImportCsvClick}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-colors"
+          style={{
+            backgroundColor: "var(--bg-canvas)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+          }}
+          title="从 CSV 加载径流 (年份 + 4~3 月, 12 列)"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          导入 CSV
         </button>
         <button
           onClick={handleExport}

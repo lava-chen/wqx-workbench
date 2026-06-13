@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { useAllResults } from "@/hooks/useAllResults";
 import { useParams } from "@/hooks/useParams";
+import { useSchemePalette } from "@/hooks/useSchemePalette";
 import { compute_fangpo_line } from "@/lib/engine";
 
 // ============================================================
@@ -59,7 +60,7 @@ function fmtPower(n: number): string {
   return n.toFixed(1);
 }
 
-const SCHEME_KEYS = ["I", "II", "III", "IV"] as const;
+// 动态方案列表由 useSchemePalette 提供, 不再硬编码 4 方案
 
 // ============================================================
 // ① 拓扑等高线 SVG (Hero 装饰)
@@ -230,7 +231,17 @@ interface MatrixMetric {
   pick: (row: any) => number;
 }
 
-function ComparisonMatrix({ table }: { table: any[] }) {
+function ComparisonMatrix({
+  table,
+  schemes,
+  colorById,
+  labelById,
+}: {
+  table: any[];
+  schemes: string[];
+  colorById: Record<string, string>;
+  labelById: Record<string, string>;
+}) {
   const metrics: MatrixMetric[] = [
     {
       key: "Z_zheng",
@@ -300,7 +311,7 @@ function ComparisonMatrix({ table }: { table: any[] }) {
             className="text-[10px] font-mono uppercase tracking-wider"
             style={{ color: "var(--muted)" }}
           >
-            I ~ IV · 4 SCHEMES
+            {schemes.length} 方案 · {schemes.join("·")}
           </span>
         </div>
         <span
@@ -310,7 +321,12 @@ function ComparisonMatrix({ table }: { table: any[] }) {
           ◼︎ 数值 · ▮ 量级
         </span>
       </div>
-      <div className="grid grid-cols-[110px_repeat(4,1fr)] text-xs">
+      <div
+        className="grid text-xs"
+        style={{
+          gridTemplateColumns: `110px repeat(${schemes.length}, minmax(0, 1fr))`,
+        }}
+      >
         {/* 表头 */}
         <div
           className="border-b border-r px-4 py-2.5 text-[10px] font-mono uppercase tracking-wider"
@@ -318,26 +334,40 @@ function ComparisonMatrix({ table }: { table: any[] }) {
         >
           指标 / 方案
         </div>
-        {SCHEME_KEYS.map((k, idx) => (
+        {schemes.map((k, idx) => (
           <div
             key={k}
             className="border-b px-3 py-2.5 text-center"
-            style={{
-              borderRight: idx < 3 ? "1px solid var(--border)" : undefined,
-              borderColor: "var(--border)",
-            }}
+            style={
+              idx < schemes.length - 1
+                ? {
+                    borderRightWidth: "1px",
+                    borderRightStyle: "solid",
+                    borderRightColor: "var(--border)",
+                    borderColor: "var(--border)",
+                  }
+                : { borderColor: "var(--border)" }
+            }
           >
+            <span
+              className="inline-block h-2 w-2 rounded-full mr-1.5 align-middle"
+              style={{ backgroundColor: colorById[k] }}
+            />
             <span
               className="font-display text-base font-semibold"
               style={{ color: "var(--text)" }}
             >
-              {k}
+              {labelById[k] ?? k}
             </span>
           </div>
         ))}
 
         {metrics.map((m) => {
-          const values = table.map((row) => m.pick(row));
+          // table 是 useAllResults 输出的汇总, 列顺序 = schemes 顺序
+          const values = schemes.map((sk) => {
+            const row = table.find((r) => r.scheme === sk);
+            return row ? m.pick(row) : 0;
+          });
           const max = Math.max(...values, Number.EPSILON);
           const min = Math.min(...values);
           // 找最佳方案
@@ -367,14 +397,21 @@ function ComparisonMatrix({ table }: { table: any[] }) {
               {values.map((v, i) => {
                 const ratio = (v - min) / (max - min + Number.EPSILON);
                 const isBest = i === best;
+                const sk = schemes[i];
                 return (
                   <div
                     key={i}
                     className="relative flex flex-col gap-1 px-3 py-2.5"
-                    style={{
-                      borderRight: i < 3 ? "1px solid var(--border)" : undefined,
-                      borderColor: "var(--border)",
-                    }}
+                    style={
+                      i < schemes.length - 1
+                        ? {
+                            borderRightWidth: "1px",
+                            borderRightStyle: "solid",
+                            borderRightColor: "var(--border)",
+                            borderColor: "var(--border)",
+                          }
+                        : { borderColor: "var(--border)" }
+                    }
                   >
                     <div className="flex items-baseline justify-between">
                       <span
@@ -405,7 +442,7 @@ function ComparisonMatrix({ table }: { table: any[] }) {
                         style={{
                           width: `${Math.max(8, ratio * 100)}%`,
                           background: isBest
-                            ? "var(--accent-color)"
+                            ? colorById[sk] ?? "var(--accent-color)"
                             : "var(--muted)",
                           opacity: isBest ? 1 : 0.45,
                         }}
@@ -428,13 +465,19 @@ function ComparisonMatrix({ table }: { table: any[] }) {
 
 function FloodMatrix({
   floodResults,
+  schemes,
+  colorById,
+  labelById,
   onNavigate,
 }: {
   floodResults: Record<string, any>;
+  schemes: string[];
+  colorById: Record<string, string>;
+  labelById: Record<string, string>;
   onNavigate: () => void;
 }) {
   // 找每个方案的设计 / 校核 洪水位
-  const cellData = SCHEME_KEYS.map((k) => {
+  const cellData = schemes.map((k) => {
     const f = floodResults[k];
     if (!f) return null;
     return {
@@ -503,7 +546,11 @@ function FloodMatrix({
                     className="font-display text-sm font-semibold"
                     style={{ color: "var(--text)" }}
                   >
-                    方案 {c.key}
+                    <span
+                      className="inline-block h-2 w-2 rounded-full mr-1.5 align-middle"
+                      style={{ backgroundColor: colorById[c.key] }}
+                    />
+                    {labelById[c.key] ?? `方案 ${c.key}`}
                   </span>
                   <span
                     className="flex items-center gap-1.5 text-[10px] font-mono"
@@ -1021,8 +1068,10 @@ function CalcChainCard() {
 
 function QuickNav({
   onNavigate,
+  schemeCount,
 }: {
   onNavigate: (tab: string) => void;
+  schemeCount: number;
 }) {
   const tiles = [
     {
@@ -1064,7 +1113,7 @@ function QuickNav({
       id: "overview",
       label: "方案编辑",
       en: "EDITOR",
-      desc: "4 方案参数表单",
+      desc: `${schemeCount} 方案参数表单`,
       Icon: Mountain,
     },
   ];
@@ -1131,6 +1180,7 @@ export interface DashboardPageProps {
 export function DashboardPage({ onNavigate }: DashboardPageProps = {}) {
   const { params, isModified } = useParams();
   const { waterResults, floodResults, table, econ } = useAllResults();
+  const { schemes: schemeIds, colorById, labelById } = useSchemePalette();
   const currentScheme = params.scheme;
   const current = waterResults[currentScheme];
   const currentEcon = econ.find((e: any) => e.scheme === currentScheme);
@@ -1384,9 +1434,17 @@ export function DashboardPage({ onNavigate }: DashboardPageProps = {}) {
 
       {/* ③ + ④ 对比矩阵 + 调洪安全 ──────────────────────── */}
       <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-        <ComparisonMatrix table={table ?? []} />
+        <ComparisonMatrix
+          table={table ?? []}
+          schemes={schemeIds}
+          colorById={colorById}
+          labelById={labelById}
+        />
         <FloodMatrix
           floodResults={floodResults}
+          schemes={schemeIds}
+          colorById={colorById}
+          labelById={labelById}
           onNavigate={() => onNavigate?.("charts")}
         />
       </div>
@@ -1407,7 +1465,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps = {}) {
       </div>
 
       {/* ⑥ 快捷导航 ────────────────────────────────────── */}
-      <QuickNav onNavigate={(t) => onNavigate?.(t)} />
+      <QuickNav onNavigate={(t) => onNavigate?.(t)} schemeCount={schemeIds.length} />
 
       {/* 底部脚注 */}
       <div
